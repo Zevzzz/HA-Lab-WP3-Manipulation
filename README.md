@@ -1,4 +1,4 @@
-# moveitpy_execute_node (WIP)
+# HA Lab WP3 Manipulation (WIP)
 
 ## Overview
 
