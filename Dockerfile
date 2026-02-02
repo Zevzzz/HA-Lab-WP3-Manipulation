@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && apt-get install -y \
     ros-jazzy-moveit \
     ros-jazzy-moveit-py \
+    ros-jazzy-moveit-resources-panda-moveit-config \
     ros-jazzy-ros2-control \
     ros-jazzy-ros2-controllers \
     ros-jazzy-ros-gz \
