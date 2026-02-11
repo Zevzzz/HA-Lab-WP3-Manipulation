@@ -5,8 +5,18 @@
   <xacro:arg name="initial_positions_file" default="" />
   <xacro:arg name="ros2_controllers_file" default="" />
 
+  <!-- World link anchors base to world frame in Gazebo (prevents tipping) -->
+  <link name="world"/>
+
   <!-- Physical robot from panda_description -->
   <xacro:include filename="$(find moveit_resources_panda_description)/urdf/panda.urdf.xacro" />
+
+  <!-- Fixed joint: world -> panda_link0 so base stays anchored -->
+  <joint name="world_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="panda_link0"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
 
   <!-- Our ros2_control with correct <hardware><plugin> format (moveit_resources only supports mock/isaac) -->
   <xacro:include filename="$(find moveitpy_execute_node)/urdf/panda_gazebo.ros2_control.xacro" />

@@ -87,15 +87,7 @@ def generate_launch_description():
         parameters=[moveit_config.robot_description, use_sim_time],
     )
 
-    static_tf_node = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_transform_publisher",
-        output="log",
-        arguments=["0", "0", "0", "0", "0", "0", "world", "panda_link0"],
-        parameters=[use_sim_time],
-    )
-
+    # world -> panda_link0 comes from URDF (fixed joint); no static_tf needed
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -162,7 +154,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         clock_bridge,
-        static_tf_node,
         robot_state_publisher,
         move_group_node,
         rviz_node,
