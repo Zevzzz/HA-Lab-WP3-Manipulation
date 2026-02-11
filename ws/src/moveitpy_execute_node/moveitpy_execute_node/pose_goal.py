@@ -1,4 +1,5 @@
 import random
+import threading
 import time
 
 import rclpy
@@ -7,6 +8,14 @@ from rclpy.logging import get_logger
 from geometry_msgs.msg import PoseStamped
 
 from moveit.planning import MoveItPy
+
+
+def sleep_until_ok(duration_sec, check_interval_sec=0.1):
+    """Sleep for duration_sec but return early if rclpy is shutting down."""
+    elapsed = 0.0
+    while elapsed < duration_sec and rclpy.ok():
+        time.sleep(min(check_interval_sec, duration_sec - elapsed))
+        elapsed += check_interval_sec
 
 
 def try_plan_and_execute(robot, planning_component, logger):
@@ -24,31 +33,17 @@ def try_plan_and_execute(robot, planning_component, logger):
     return False
 
 
-def main():
-    rclpy.init()
-    logger = get_logger("moveitpy_execute_node.pose_goal")
-
-    robot = MoveItPy(node_name="moveit_py")
-    arm = robot.get_planning_component("panda_arm")
-    logger.info("MoveItPy instance created")
-
-    # Give RViz/time for startup and any TF/joint state settling.
-    logger.info("Waiting 5s for RViz/controllers/joint states to settle...")
-    time.sleep(5.0)
-
-    # Loop: pick random pose targets, plan/execute, pause, repeat.
+def run_attempt_loop(robot, arm, logger):
+    """Run the plan/execute loop. Blocking (execute) runs here so main can respond to Ctrl+C."""
     attempt = 0
     while rclpy.ok():
         attempt += 1
         logger.info(f"Attempt {attempt}: sampling random pose goal")
 
-        # Try multiple samples before giving up on this cycle.
         success = False
         for sample_idx in range(1, 6):
-            # Start state = current (refresh every sample).
             arm.set_start_state_to_current_state()
 
-            # Random pose goal (in panda base frame), end-effector link panda_link8
             pose_goal = PoseStamped()
             pose_goal.header.frame_id = "panda_link0"
             pose_goal.pose.orientation.w = 1.0
@@ -73,9 +68,36 @@ def main():
         if not success:
             logger.error(f"Attempt {attempt}: all samples failed")
 
-        time.sleep(3.0)
+        sleep_until_ok(3.0)
 
-    rclpy.shutdown()
+
+def main():
+    rclpy.init()
+    logger = get_logger("moveitpy_execute_node.pose_goal")
+
+    robot = MoveItPy(node_name="moveit_py")
+    arm = robot.get_planning_component("panda_arm")
+    logger.info("MoveItPy instance created")
+
+    logger.info("Waiting 5s for RViz/controllers/joint states to settle...")
+    sleep_until_ok(5.0)
+
+    # Run blocking plan/execute loop in a daemon thread so main thread can respond to Ctrl+C.
+    # When we receive SIGINT, main exits and the daemon thread is killed even if stuck in execute().
+    worker = threading.Thread(
+        target=run_attempt_loop,
+        args=(robot, arm, logger),
+        daemon=True,
+    )
+    worker.start()
+
+    try:
+        while rclpy.ok():
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

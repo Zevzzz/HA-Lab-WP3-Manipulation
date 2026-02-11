@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y \
     ros-jazzy-ros2-controllers \
     ros-jazzy-ros-gz \
     ros-jazzy-gz-ros2-control \
+    ros-jazzy-gz-ros2-control-demos \
     ros-jazzy-joint-state-publisher-gui \
     ros-jazzy-tf-transformations \
     ros-jazzy-tf2-tools \
