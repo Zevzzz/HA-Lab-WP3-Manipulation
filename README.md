@@ -11,38 +11,23 @@ single fixed target or different bounds, edit `moveitpy_execute_node/pose_goal.p
 
 From the workspace (e.g. `ws/`):
 ```bash
-colcon build --packages-select moveitpy_execute_node
+colcon build
 source install/setup.bash
 ```
 
 ## How to run
 
-**RViz only (mock):** one terminal
+**Isaac Sim Visualization:** two terminals
 ```bash
-ros2 launch moveitpy_execute_node panda_pose_goal.launch.py
+# Terminal 1 – start Isaac Sim
+./scripts/run_isaac_sim.sh
+
+# Terminal 2 - run execute node
+ros2 launch moveitpy_execute_node panda_pose_goal_isaac.launch.py
 ```
 
-**Gazebo (sim):** three terminals
-```bash
-# Terminal 1 – start Gazebo
-ros2 launch ros_gz_sim gz_sim.launch.py gz_args:="-r empty.sdf"
-
-# Terminal 2 – spawn Panda
-ros2 launch moveitpy_execute_node panda_gz_spawn.launch.py
-
-# Terminal 3 – MoveIt + pose_goal
-ros2 launch moveitpy_execute_node panda_pose_goal_gz.launch.py
-```
-
-Full step-by-step: **[docs/HOW_TO_RUN.md](docs/HOW_TO_RUN.md)**.
-
-## Gazebo setup
-
-Background and setup details: [docs/GAZEBO_SETUP.md](docs/GAZEBO_SETUP.md).
 
 ## TODO
-
-- Run in GZ and integrate
-- Add GraspNet
+- Potential tech debt - custom trajectory bridge node instead of a stock version
+- Add GraspGen
 - Evaluate GraspNet functionality
-- Try Isaac Sim
