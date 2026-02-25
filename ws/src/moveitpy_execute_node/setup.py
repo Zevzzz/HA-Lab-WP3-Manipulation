@@ -14,7 +14,7 @@ setup(
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
         (os.path.join("share", package_name, "config"), glob("config/*.srdf")),
     ],
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "scipy"],
     zip_safe=True,
     maintainer="ros",
     maintainer_email="ros@todo.todo",
