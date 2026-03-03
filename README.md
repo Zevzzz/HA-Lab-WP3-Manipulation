@@ -2,10 +2,9 @@
 
 ## Overview
 
-Small MoveItPy demo for the Panda arm that launches RViz + MoveIt and runs a looped
+Small MoveItPy demo for the Panda arm that launches MoveIt + Isaac Sim and runs a looped
 pose-goal motion from a Python node. The script samples random targets in a safe-ish
-workspace, plans with OMPL, and executes on the fake controllers. If you need a
-single fixed target or different bounds, edit `moveitpy_execute_node/pose_goal.py`.
+workspace, plans with OMPL, and executes on Isaac Sim. 
 
 ## Build
 
