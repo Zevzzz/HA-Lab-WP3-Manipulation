@@ -23,7 +23,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "pose_goal = moveitpy_execute_node.pose_goal:main",
+            "grasp_sequence = moveitpy_execute_node.grasp_sequence:main",
+            "gripper_command = moveitpy_execute_node.gripper_command_node:main",
             "trajectory_bridge = moveitpy_execute_node.trajectory_bridge:main",
         ],
     },

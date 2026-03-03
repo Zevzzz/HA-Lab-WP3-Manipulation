@@ -1,5 +1,5 @@
 """
-Launch MoveIt + pose_goal + trajectory_bridge for Panda with Isaac Sim.
+Launch MoveIt + grasp_sequence + trajectory_bridge for Panda with Isaac Sim.
 
 Isaac Sim must be running (your scene, Play, Action Graph publishing /joint_states,
 /clock and subscribing to /joint_command). Start this launch in the container after
@@ -13,6 +13,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -109,6 +112,16 @@ def generate_launch_description():
         ],
     )
 
+    use_rviz_arg = DeclareLaunchArgument(
+        "use_rviz",
+        default_value="false",
+        description="Launch RViz2 for visualization.",
+    )
+    rviz_group = GroupAction(
+        [rviz_node],
+        condition=IfCondition(LaunchConfiguration("use_rviz")),
+    )
+
     trajectory_bridge_node = Node(
         package="moveitpy_execute_node",
         executable="trajectory_bridge",
@@ -117,9 +130,9 @@ def generate_launch_description():
         parameters=[use_sim_time],
     )
 
-    pose_goal_node = Node(
+    grasp_sequence_node = Node(
         package="moveitpy_execute_node",
-        executable="pose_goal",
+        executable="grasp_sequence",
         name="moveit_py",
         output="screen",
         parameters=[
@@ -130,10 +143,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        use_rviz_arg,
         static_tf_node,
         robot_state_publisher,
         move_group_node,
         trajectory_bridge_node,
-        rviz_node,
-        pose_goal_node,
+        rviz_group,
+        grasp_sequence_node,
     ])

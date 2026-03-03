@@ -15,19 +15,21 @@ from rclpy.action import ActionServer
 from rclpy.node import Node
 from control_msgs.action import FollowJointTrajectory
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64
+
+from .constants import (
+    ALL_JOINTS,
+    GRIPPER_OPEN,
+    PANDA_ARM_JOINTS,
+    PANDA_GRIPPER_JOINTS,
+)
 
 INTERP_HZ = 125
 INTERP_DT = 1.0 / INTERP_HZ
-DEFAULT_GRIPPER_POSITION = 0.04
+IDLE_HZ = 20
 NANOSEC_TO_SEC = 1e-9
-
-PANDA_ARM_JOINTS = [
-    "panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4",
-    "panda_joint5", "panda_joint6", "panda_joint7",
-]
-PANDA_GRIPPER_JOINTS = ["panda_finger_joint1", "panda_finger_joint2"]
-ALL_JOINTS = PANDA_ARM_JOINTS + PANDA_GRIPPER_JOINTS
 ARM_ACTION = "panda_arm_controller/follow_joint_trajectory"
+GRIPPER_CMD_TOPIC = "/gripper_command"
 
 
 def duration_to_sec(d) -> float:
@@ -50,11 +52,17 @@ class TrajectoryBridgeNode(Node):
         self._state_lock = threading.Lock()
         self._latest_position: dict = {}
         self._latest_velocity: dict = {}
+        self._gripper_target: float = GRIPPER_OPEN
+        self._executing: bool = False
         self.create_subscription(JointState, "/joint_states", self._joint_states_cb, 10)
+        self.create_subscription(Float64, GRIPPER_CMD_TOPIC, self._gripper_cmd_cb, 10)
+        self._idle_timer = self.create_timer(1.0 / IDLE_HZ, self._idle_cb)
         self._arm_server = ActionServer(
             self, FollowJointTrajectory, ARM_ACTION, self._execute_callback
         )
-        self.get_logger().info(f"Trajectory bridge: {ARM_ACTION} -> /joint_command")
+        self.get_logger().info(
+            f"Trajectory bridge: {ARM_ACTION} + {GRIPPER_CMD_TOPIC} -> /joint_command (single publisher)"
+        )
 
     def _on_sigint(self, signum, frame) -> None:
         self._cancel_event.set()
@@ -69,14 +77,14 @@ class TrajectoryBridgeNode(Node):
                 if msg.velocity and i < len(msg.velocity):
                     self._latest_velocity[name] = msg.velocity[i]
 
-    def _get_gripper_state(self) -> Tuple[List[float], List[float]]:
-        """Return (positions, velocities) for gripper joints from latest /joint_states."""
+    def _gripper_cmd_cb(self, msg: Float64) -> None:
+        self._gripper_target = float(msg.data)
+
+    def _get_arm_state(self) -> Tuple[List[float], List[float]]:
+        """Return (positions, velocities) for arm joints from latest /joint_states."""
         with self._state_lock:
-            pos = [
-                self._latest_position.get(j, DEFAULT_GRIPPER_POSITION)
-                for j in PANDA_GRIPPER_JOINTS
-            ]
-            vel = [self._latest_velocity.get(j, 0.0) for j in PANDA_GRIPPER_JOINTS]
+            pos = [self._latest_position.get(j, 0.0) for j in PANDA_ARM_JOINTS]
+            vel = [self._latest_velocity.get(j, 0.0) for j in PANDA_ARM_JOINTS]
         return pos, vel
 
     def _build_joint_state_msg(
@@ -158,23 +166,35 @@ class TrajectoryBridgeNode(Node):
                 return
             t = min(time.perf_counter() - start_wall, t_end)
             pos, vel = self._interpolate(waypoints, t)
-            g_pos, g_vel = self._get_gripper_state()
+            g = self._gripper_target
             msg = self._build_joint_state_msg(
                 [pos[n] for n in PANDA_ARM_JOINTS],
                 [vel[n] for n in PANDA_ARM_JOINTS],
-                g_pos,
-                g_vel,
+                [g, g],
+                [0.0, 0.0],
             )
             self._pub.publish(msg)
         # Final state
         _, pos_final, vel_final = waypoints[-1]
-        g_pos, _ = self._get_gripper_state()
+        g = self._gripper_target
         msg = self._build_joint_state_msg(
             [pos_final.get(n, 0.0) for n in PANDA_ARM_JOINTS],
             [0.0] * len(PANDA_ARM_JOINTS),
-            g_pos,
-            [0.0] * len(PANDA_GRIPPER_JOINTS),
+            [g, g],
+            [0.0, 0.0],
         )
+        self._pub.publish(msg)
+
+    def _idle_cb(self) -> None:
+        """Publish current arm + gripper target when not executing a trajectory."""
+        if self._executing:
+            return
+        with self._state_lock:
+            if not all(j in self._latest_position for j in PANDA_ARM_JOINTS):
+                return
+        arm_pos, arm_vel = self._get_arm_state()
+        g = self._gripper_target
+        msg = self._build_joint_state_msg(arm_pos, arm_vel, [g, g], [0.0, 0.0])
         self._pub.publish(msg)
 
     def _execute_callback(self, goal_handle):
@@ -184,9 +204,13 @@ class TrajectoryBridgeNode(Node):
             return FollowJointTrajectory.Result()
         self._cancel_event.clear()
         self._trajectory_canceled = False
-        thread = threading.Thread(target=self._run_trajectory, args=(trajectory,), daemon=True)
-        thread.start()
-        thread.join()
+        self._executing = True
+        try:
+            thread = threading.Thread(target=self._run_trajectory, args=(trajectory,), daemon=True)
+            thread.start()
+            thread.join()
+        finally:
+            self._executing = False
         result = FollowJointTrajectory.Result()
         if self._trajectory_canceled:
             result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
