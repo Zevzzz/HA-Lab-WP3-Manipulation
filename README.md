@@ -16,12 +16,16 @@ source install/setup.bash
 
 ## How to run
 
-**Isaac Sim:** two terminals
 ```bash
-# Terminal 1 – start Isaac Sim
+# Terminal 1 - GraspGen Server
+cd deps/GraspGen
+bash docker/run.sh . --models ./GraspGenModels
+python client-server/graspgen_server.py --gripper_config /models/checkpoints/graspgen_franka_panda.yml --port 5557
+
+# Terminal 2 – start Isaac Sim
 ./scripts/run_isaac_sim.sh
 
-# Terminal 2 – run execute node 
+# Terminal 3 – run execute node 
 ros2 launch moveitpy_execute_node panda_pose_goal_isaac.launch.py
 ```
 
