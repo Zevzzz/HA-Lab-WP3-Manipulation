@@ -14,6 +14,13 @@ services:
     stdin_open: true
     tty: true
     privileged: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
@@ -23,7 +30,6 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-$HOME/.Xauthority}:/home/ros/.Xauthority:ro
       - ./ws/src:/home/ros/ws/src:rw
-      - ./ws/deps:/home/ros/ws/deps:rw
       - ./data:/home/ros/data:rw
       - /dev:/dev
       - /dev/bus:/dev/bus:ro

@@ -17,6 +17,23 @@ RUN apt-get update && apt-get install -y \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
+# Python 3.10 for GraspGen
+#RUN add-apt-repository -y ppa:deadsnakes/ppa \
+#    && apt-get update \
+#    && apt-get install -y python3.10 python3.10-venv python3.10-dev \
+#    && rm -rf /var/lib/apt/lists/*
+#    
+#RUN apt-get update && apt-get install -y wget \
+#    && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-#keyring_1.1-1_all.deb \
+#    && dpkg -i cuda-keyring_1.1-1_all.deb \
+#    && rm -f cuda-keyring_1.1-1_all.deb \
+#    && apt-get update \
+#    && apt-get install -y cuda-toolkit-12-1 \
+#    && rm -rf /var/lib/apt/lists/*
+#ENV CUDA_HOME=/usr/local/cuda
+#ENV PATH="${CUDA_HOME}/bin:${PATH}"
+#ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+
 # ROS deps for sim + planning
 RUN apt-get update && apt-get install -y \
     ros-jazzy-moveit \
