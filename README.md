@@ -25,7 +25,8 @@ python client-server/graspgen_server.py --gripper_config /models/checkpoints/gra
 # Terminal 2 – start Isaac Sim
 ./scripts/run_isaac_sim.sh
 
-# Terminal 3 – run execute node 
+# Terminal 3 – run execute node
+colcon build && source install/setup.bash
 ros2 launch moveitpy_execute_node panda_pose_goal_isaac.launch.py
 ```
 
