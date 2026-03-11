@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+*.manifest
+
+# Virtual environments (scripts, deps, or repo root)
+**/.venv/
+**/venv/
+env/
+.env/
+
+# ROS 2 / colcon workspace
+ws/build/
+ws/install/
+ws/log/
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and caches
+*.log
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# GraspGen / deps (local models and run artifacts; keep deps/GraspGen repo)
+# Uncomment if you want to ignore mounted model dirs:
+# deps/GraspGenModels/
+# deps/GraspGen/.venv/
