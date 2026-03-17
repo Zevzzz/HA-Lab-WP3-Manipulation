@@ -128,16 +128,23 @@ def generate_launch_description():
         ],
     )
 
-    # IMPORTANT: give MoveItPy the SAME params, on the SAME node
-    pose_goal_node = Node(
+    # Executor node: MoveItPy + ExecutePose action (same params and node name for MoveItPy)
+    executor_node = Node(
         package="moveitpy_execute_node",
-        executable="pose_goal",
-        name="moveit_py",  # make the node name exactly what your MoveItPy() expects
+        executable="executor_node",
+        name="moveit_py",
         output="screen",
         parameters=[
             moveit_config.to_dict(),
             moveit_cpp_params,
         ],
+    )
+
+    demo_random_node = Node(
+        package="moveitpy_execute_node",
+        executable="demo_random_poses",
+        name="demo_random_poses",
+        output="screen",
     )
 
     return LaunchDescription([
@@ -149,5 +156,6 @@ def generate_launch_description():
         panda_arm_controller_spawner,
         panda_hand_controller_spawner,
         rviz_node,
-        pose_goal_node,
+        executor_node,
+        demo_random_node,
     ])

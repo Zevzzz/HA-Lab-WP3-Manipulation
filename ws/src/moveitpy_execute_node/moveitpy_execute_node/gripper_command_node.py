@@ -13,13 +13,13 @@ from std_msgs.msg import Float64
 
 from .constants import (
     ALL_JOINTS,
+    GRIPPER_CMD_TOPIC,
     GRIPPER_CLOSE,
     GRIPPER_OPEN,
     PANDA_ARM_JOINTS,
     PANDA_GRIPPER_JOINTS,
 )
 
-GRIPPER_CMD_TOPIC = "/gripper_command"
 JOINT_CMD_TOPIC = "/joint_command"
 JOINT_STATES_TOPIC = "/joint_states"
 CMD_HZ = 20
@@ -34,7 +34,9 @@ class GripperCommandNode(Node):
         self._gripper_target: float = GRIPPER_OPEN
         self._pub = self.create_publisher(JointState, JOINT_CMD_TOPIC, 10)
         self.create_subscription(JointState, JOINT_STATES_TOPIC, self._joint_states_cb, 10)
-        self.create_subscription(Float64, GRIPPER_CMD_TOPIC, self._gripper_cmd_cb, 10)
+        self.create_subscription(
+            Float64, GRIPPER_CMD_TOPIC, self._gripper_cmd_cb, 10
+        )
         self._timer = self.create_timer(1.0 / CMD_HZ, self._timer_cb)
         self.get_logger().info(
             f"Gripper command: {GRIPPER_CMD_TOPIC} -> {JOINT_CMD_TOPIC} at {CMD_HZ} Hz (hold target)"

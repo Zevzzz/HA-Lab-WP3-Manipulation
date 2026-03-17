@@ -23,9 +23,14 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "grasp_sequence = moveitpy_execute_node.grasp_sequence:main",
-            "gripper_command = moveitpy_execute_node.gripper_command_node:main",
+            "executor_node = moveitpy_execute_node.executor_node:main",
             "trajectory_bridge = moveitpy_execute_node.trajectory_bridge:main",
+            "gripper_command = moveitpy_execute_node.gripper_command_node:main",
+            "demo_grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",
+            "demo_random_poses = moveitpy_execute_node.demo_random_poses:main",
+            # Backward compatibility: old names run the new demos (executor must be running)
+            "grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",
+            "pose_goal = moveitpy_execute_node.demo_random_poses:main",
         ],
     },
 )

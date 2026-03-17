@@ -19,6 +19,7 @@ from std_msgs.msg import Float64
 
 from .constants import (
     ALL_JOINTS,
+    GRIPPER_CMD_TOPIC,
     GRIPPER_OPEN,
     PANDA_ARM_JOINTS,
     PANDA_GRIPPER_JOINTS,
@@ -29,7 +30,6 @@ INTERP_DT = 1.0 / INTERP_HZ
 IDLE_HZ = 20
 NANOSEC_TO_SEC = 1e-9
 ARM_ACTION = "panda_arm_controller/follow_joint_trajectory"
-GRIPPER_CMD_TOPIC = "/gripper_command"
 
 
 def duration_to_sec(d) -> float:

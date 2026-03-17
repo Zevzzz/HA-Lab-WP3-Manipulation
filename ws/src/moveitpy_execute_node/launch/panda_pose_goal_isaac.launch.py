@@ -1,20 +1,21 @@
 """
-Launch MoveIt + grasp_sequence + trajectory_bridge for Panda with Isaac Sim.
+Launch MoveIt + executor_node + trajectory_bridge for Panda with Isaac Sim.
 
 Isaac Sim must be running (your scene, Play, Action Graph publishing /joint_states,
 /clock and subscribing to /joint_command). Start this launch in the container after
 setting the same ROS_DOMAIN_ID (and DDS profile if needed) as your Isaac wrapper.
 
 No controller_manager or spawners; the trajectory_bridge provides the action server
-and forwards to /joint_command for Isaac.
+and forwards to /joint_command for Isaac. The executor_node exposes the ExecutePose
+action for motion planning; optional demo (grasp or random) runs a test sequence.
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -130,9 +131,9 @@ def generate_launch_description():
         parameters=[use_sim_time],
     )
 
-    grasp_sequence_node = Node(
+    executor_node = Node(
         package="moveitpy_execute_node",
-        executable="grasp_sequence",
+        executable="executor_node",
         name="moveit_py",
         output="screen",
         parameters=[
@@ -142,12 +143,38 @@ def generate_launch_description():
         ],
     )
 
+    demo_arg = DeclareLaunchArgument(
+        "demo",
+        default_value="grasp",
+        description="Demo to run: 'none', 'grasp', or 'random'.",
+    )
+
+    demo_grasp_node = Node(
+        package="moveitpy_execute_node",
+        executable="demo_grasp_sequence",
+        name="demo_grasp_sequence",
+        output="screen",
+        parameters=[use_sim_time],
+        condition=LaunchConfigurationEquals("demo", "grasp"),
+    )
+    demo_random_node = Node(
+        package="moveitpy_execute_node",
+        executable="demo_random_poses",
+        name="demo_random_poses",
+        output="screen",
+        parameters=[use_sim_time],
+        condition=LaunchConfigurationEquals("demo", "random"),
+    )
+
     return LaunchDescription([
         use_rviz_arg,
+        demo_arg,
         static_tf_node,
         robot_state_publisher,
         move_group_node,
         trajectory_bridge_node,
+        executor_node,
         rviz_group,
-        grasp_sequence_node,
+        demo_grasp_node,
+        demo_random_node,
     ])

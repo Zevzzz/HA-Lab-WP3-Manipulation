@@ -13,6 +13,7 @@
   <depend>moveit_py</depend>
   <depend>moveit_resources_panda_description</depend>
   <depend>moveit_resources_panda_moveit_config</depend>
+  <depend>moveitpy_execute_node_msgs</depend>
   <depend>xacro</depend>
 
   <test_depend>ament_copyright</test_depend>
