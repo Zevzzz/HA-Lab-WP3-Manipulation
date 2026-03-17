@@ -14,7 +14,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, GroupAction
 from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -145,8 +145,8 @@ def generate_launch_description():
 
     demo_arg = DeclareLaunchArgument(
         "demo",
-        default_value="grasp",
-        description="Demo to run: 'none', 'grasp', or 'random'.",
+        default_value="none",
+        description="Demo to run: 'none' (default), 'grasp', or 'random'. Set for debug only.",
     )
 
     demo_grasp_node = Node(

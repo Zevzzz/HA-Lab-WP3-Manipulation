@@ -42,7 +42,7 @@ colcon build && source install/setup.bash
 ros2 launch moveitpy_execute_node panda_pose_goal_isaac.launch.py
 ```
 
-- Use `demo:=grasp` (default), `demo:=random`, or `demo:=none` to choose the demo or run no demo.
+- Use `demo:=grasp` or `demo:=random` to run a demo (for debug); default is no demo (action server only).
 - Add `use_rviz:=true` for RViz.
 
 ## TODO
