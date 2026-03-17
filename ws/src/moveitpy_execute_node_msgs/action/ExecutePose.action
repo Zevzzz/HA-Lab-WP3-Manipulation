@@ -1,5 +1,7 @@
 # Goal: target end-effector pose (frame_id must be set)
 geometry_msgs/PoseStamped target_pose
+# If true, only plan (no execution); use false to execute after a successful plan.
+bool plan_only
 ---
 # Result
 bool success

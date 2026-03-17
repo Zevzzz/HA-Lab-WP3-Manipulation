@@ -14,7 +14,7 @@ setup(
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
         (os.path.join("share", package_name, "config"), glob("config/*.srdf")),
     ],
-    install_requires=["setuptools", "scipy"],
+    install_requires=["setuptools", "scipy", "PyYAML"],
     zip_safe=True,
     maintainer="ros",
     maintainer_email="ros@todo.todo",
@@ -28,6 +28,7 @@ setup(
             "gripper_command = moveitpy_execute_node.gripper_command_node:main",
             "demo_grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",
             "demo_random_poses = moveitpy_execute_node.demo_random_poses:main",
+            "grasp_with_candidates = moveitpy_execute_node.grasp_with_candidates:main",
             # Backward compatibility: old names run the new demos (executor must be running)
             "grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",
             "pose_goal = moveitpy_execute_node.demo_random_poses:main",

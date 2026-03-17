@@ -1,5 +1,6 @@
 # For graspgen_request.py (GraspGen ZMQ client; mesh + point cloud load, YAML out)
 numpy
+scipy
 pyzmq
 msgpack
 msgpack-numpy

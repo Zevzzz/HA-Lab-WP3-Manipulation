@@ -58,7 +58,7 @@ def main():
     p = argparse.ArgumentParser(description="Visualize grasps YAML + point cloud")
     p.add_argument("yaml_path", type=Path, help="Grasps YAML (from graspgen_request.py)")
     p.add_argument("pc_path", type=Path, nargs="?", default=None, help="Point cloud .ply or .npy (default: same stem as yaml with .ply)")
-    p.add_argument("--max-grasps", type=int, default=20, help="Show at most this many grasp frames (default 20)")
+    p.add_argument("--max-grasps", type=int, default=None, metavar="N", help="Show at most N grasp frames (default: all)")
     args = p.parse_args()
 
     yaml_path = Path(args.yaml_path).resolve()
@@ -94,7 +94,7 @@ def main():
 
     frame_size = 0.03
     geoms = [pcd]
-    n = min(args.max_grasps, len(grasps_list))
+    n = len(grasps_list) if args.max_grasps is None else min(args.max_grasps, len(grasps_list))
     for i in range(n):
         g = grasps_list[i]
         pos = g["position"]

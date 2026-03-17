@@ -50,7 +50,7 @@ class PoseExecutor:
         Returns True if execution completed successfully.
         """
         status = self._robot.execute(trajectory, [ARM_CONTROLLER])
-        return status
+        return bool(status)
 
     def plan_and_execute(self, pose: PoseStamped) -> bool:
         """

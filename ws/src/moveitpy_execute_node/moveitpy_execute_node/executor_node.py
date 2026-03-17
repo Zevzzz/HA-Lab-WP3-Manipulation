@@ -46,10 +46,17 @@ class ExecutorNode(Node):
             pose.header.stamp = self.get_clock().now().to_msg()
 
         result = ExecutePose.Result()
+        plan_only = getattr(goal, "plan_only", False)
         try:
-            success = self._executor.plan_and_execute(pose)
-            result.success = success
-            result.message = "Execution completed." if success else "Planning or execution failed."
+            if plan_only:
+                plan_result = self._executor.plan_to_pose(pose)
+                success = plan_result is not None
+                result.message = "Plan found." if success else "Planning failed."
+            else:
+                success = self._executor.plan_and_execute(pose)
+                result.message = "Execution completed." if success else "Planning or execution failed."
+            # Must be a strict Python bool for ROS message serialization (PyBool_Check)
+            result.success = bool(success)
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"ExecutePose failed: {e}")
             result.success = False
