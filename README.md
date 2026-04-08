@@ -58,6 +58,20 @@ Host `./data` is mounted at **`/home/ros/data`** only. From inside the container
 **scripts/venv**  
 Use `source scripts/venv/bin/activate` when running **scripts/graspgen_request.py** or the GraspGen server on the host (pyzmq, msgpack, PyYAML, trimesh).
 
+### GraspGen: align, generate, visualize
+
+1. **Axes:** Candidates are in the **point cloud frame**, not Isaac’s by default. Align them (rotate/save the PLY to match the prim, or use `--sim-frame-rpy-deg` in `graspgen_request.py`, or `--sim-from-pc-frame-rpy-deg` in `grasp_with_candidates`) before trusting sim execution.
+
+2. **Generate YAML** (ZMQ server running, venv on):
+```bash
+python scripts/graspgen_request.py data/Mug/Mug_493.ply --host localhost --port 5557
+```
+
+3. **Visualize cloud + grasps** (Open3D; red/green/blue = X/Y/Z). Use `--center-pointcloud` if the PLY was not mean-centered; `--only-index N` for a single candidate; `--max-grasps K` for a few.
+```bash
+python scripts/visualize_grasps.py data/Mug/Mug_493_grasps.yaml --center-pointcloud --only-index 0
+```
+
 ## Troubleshooting
 
 ### All grasp candidates fail with "Planning failed"

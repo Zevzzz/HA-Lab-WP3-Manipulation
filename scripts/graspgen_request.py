@@ -6,8 +6,11 @@ Load point cloud from file, send to GraspGen ZMQ server, write returned grasps t
 
 - Point cloud is centered (subtract mean) before sending, matching GraspGen's official client.
   Grasps are therefore in object frame with origin at the centroid (geometric center).
-- Writes object_half_height_m (half of axis-aligned bbox height in z) so downstream can place
-  the object on a table: object_center_z = table_z + object_half_height_m.
+- Optional ``--sim-frame-rpy-deg``: rotate the **centered** cloud (intrinsic XYZ deg) so its axes
+  match your simulation object frame before inference. Grasps in the YAML are then expressed in
+  that aligned frame — do **not** pass the same RPY again to ``grasp_with_candidates``.
+- Writes object_half_height_m (half of axis-aligned bbox height in z) on the **possibly rotated**
+  cloud so downstream can place the object on a table: object_center_z = table_z + object_half_height_m.
 
 Uses the same wire protocol as grasp_gen.serving.zmq_client (msgpack + msgpack_numpy).
 Deps: pyzmq, msgpack, msgpack-numpy, numpy, scipy, trimesh, PyYAML.
@@ -34,6 +37,7 @@ GENERATIONS_LOG_NAME = "graspgen_generations.csv"
 
 # YAML keys for object-frame metadata (grasps are in centroid frame)
 YAML_KEY_OBJECT_HALF_HEIGHT_M = "object_half_height_m"
+YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG = "pc_to_sim_frame_rpy_deg"
 
 
 def load_point_cloud(path: Path) -> np.ndarray:
@@ -72,6 +76,8 @@ def request_grasps(
     port: int,
     num_grasps: int,
     topk_num_grasps: int,
+    *,
+    remove_outliers: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """Send point cloud to GraspGen server; returns (grasps, confidences, timing_info).
     num_grasps/topk_num_grasps are set by main() from --topk (generate and return that many).
@@ -88,7 +94,7 @@ def request_grasps(
         "topk_num_grasps": topk_num_grasps,
         "min_grasps": 1,
         "max_tries": 6,
-        "remove_outliers": True,
+        "remove_outliers": bool(remove_outliers),
     }
 
     ctx = zmq.Context()
@@ -155,6 +161,26 @@ def main():
     p.add_argument("-o", "--output", type=Path, default=None, help="Output YAML path")
     p.add_argument("--frame-id", default="object", help="frame_id in YAML (use 'object' for centroid frame)")
     p.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR, help="Dir for generation log CSV (default: data/logs)")
+    p.add_argument(
+        "--sim-frame-rpy-deg",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("RX", "RY", "RZ"),
+        help="Rotate centered point cloud by intrinsic XYZ Euler (deg) before GraspGen; "
+        "output grasps are in this aligned (sim) frame. Omit grasp_with_candidates --sim-from-pc-frame-rpy-deg for this file.",
+    )
+    p.add_argument(
+        "--write-pc-to-sim-rpy-to-yaml",
+        action="store_true",
+        help=f"Record --sim-frame-rpy-deg in YAML as {YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG} (for documentation only; "
+        "grasp_with_candidates will apply it again — use only if you did NOT pre-rotate, e.g. manual workflow).",
+    )
+    p.add_argument(
+        "--no-remove-outliers",
+        action="store_true",
+        help="Send remove_outliers=false to the server (GraspGen can delete entire small clouds otherwise).",
+    )
     args = p.parse_args()
 
     topk = args.topk if args.topk > 0 else -1
@@ -165,10 +191,41 @@ def main():
     point_cloud = load_point_cloud(args.path)
     point_cloud_centered = center_point_cloud(point_cloud)
     print(f"Loaded {len(point_cloud)} points, centered.", flush=True)
+    if args.sim_frame_rpy_deg is not None:
+        rpy = (float(args.sim_frame_rpy_deg[0]), float(args.sim_frame_rpy_deg[1]), float(args.sim_frame_rpy_deg[2]))
+        r_mat = Rotation.from_euler("xyz", list(rpy), degrees=True).as_matrix()
+        point_cloud_for_gen = np.asarray(point_cloud_centered @ r_mat.T, dtype=np.float32)
+        print(
+            f"Applied --sim-frame-rpy-deg {rpy} to centered cloud (intrinsic xyz) before inference.",
+            flush=True,
+        )
+        print(
+            "Grasps in YAML are in this sim-aligned frame. For visualize_grasps.py with raw PLY, use "
+            "`--center-pointcloud --rotate-pc-only-rpy-deg` with the same RPY (do not use "
+            "`--sim-from-pc-frame-rpy-deg` or grasps would be rotated twice).",
+            flush=True,
+        )
+    else:
+        rpy = None
+        point_cloud_for_gen = point_cloud_centered
+
+    n_send = int(point_cloud_for_gen.shape[0])
+    remove_outliers = not args.no_remove_outliers
+    if remove_outliers and n_send < 2048:
+        print(
+            f"Note: only {n_send} points — disabling server outlier removal (it often removes the whole cloud). "
+            "Use a denser PLY or pass --no-remove-outliers explicitly.",
+            flush=True,
+        )
+        remove_outliers = False
+
     grasps, confidences, timing_info = request_grasps(
-        point_cloud_centered, args.host, args.port,
+        point_cloud_for_gen,
+        args.host,
+        args.port,
         num_grasps=num_grasps,
         topk_num_grasps=topk_num_grasps,
+        remove_outliers=remove_outliers,
     )
 
     num_candidates = len(grasps)
@@ -176,7 +233,7 @@ def main():
     generation_time_s = (infer_ms / 1000.0) if infer_ms is not None else None
     _log_generation(args.log_dir, args.path.name, num_candidates, generation_time_s)
 
-    half_height_m = bbox_half_height_z(point_cloud_centered)
+    half_height_m = bbox_half_height_z(point_cloud_for_gen)
 
     out = args.output or args.path.with_stem(args.path.stem + "_grasps").with_suffix(".yaml")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -194,6 +251,8 @@ def main():
         YAML_KEY_OBJECT_HALF_HEIGHT_M: round(half_height_m, 6),
         "grasps": candidates,
     }
+    if rpy is not None and args.write_pc_to_sim_rpy_to_yaml:
+        doc[YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG] = [round(rpy[0], 4), round(rpy[1], 4), round(rpy[2], 4)]
     with open(out, "w") as f:
         yaml.safe_dump(doc, f, default_flow_style=False, sort_keys=False)
 

@@ -28,6 +28,7 @@ setup(
             "gripper_command = moveitpy_execute_node.gripper_command_node:main",
             "demo_grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",
             "demo_random_poses = moveitpy_execute_node.demo_random_poses:main",
+            "demo_fixed_pose = moveitpy_execute_node.demo_fixed_pose:main",
             "grasp_with_candidates = moveitpy_execute_node.grasp_with_candidates:main",
             # Backward compatibility: old names run the new demos (executor must be running)
             "grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",

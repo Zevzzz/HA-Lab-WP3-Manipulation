@@ -13,6 +13,15 @@ use `--yaml-pose-frame hand` to convert hand→flange via URDF.
 A pure rotation offset does **not** change goal **translation**; wrong XY vs the mug is usually YAML
 position in the object frame or prim-vs-centroid frame mismatch (`--pc-centroid-shift-*`).
 
+CRITICAL — point cloud frame vs simulation object frame:
+  • GraspGen poses are in the **same orthonormal basis as the centered point cloud** (whatever axes
+    the mesh / PLY was exported in: e.g. Y-up art tool vs Z-up sim). That frame is **not** guaranteed
+    to match your Isaac prim's local X/Y/Z.
+  • Fix (non–ad hoc): one fixed rigid rotation **T_sim_from_pc** (usually rotation only), stored as
+    ``pc_to_sim_frame_rpy_deg`` in YAML (see graspgen_request --sim-frame-rpy-deg) or passed at runtime
+    as ``--sim-from-pc-frame-rpy-deg R P Y`` (intrinsic XYZ deg, same convention as transform_utils).
+    Full chain: T_world_grasp = T_world_sim_object @ T_sim_from_pc @ T_pc_grasp.
+
 CRITICAL — two different "object origins":
   • Grasp YAML / GraspGen use the **point cloud centroid** frame (mean-centered .ply / .npy).
   • Isaac / USD often place the asset with origin at **base corner, bbox min, etc.** — NOT the centroid.
@@ -65,6 +74,7 @@ DEFAULT_TABLE_Z_M = 0.05
 DEFAULT_OBJECT_X_M = 0.4
 DEFAULT_OBJECT_Y_M = 0.0
 YAML_KEY_OBJECT_HALF_HEIGHT_M = "object_half_height_m"
+YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG = "pc_to_sim_frame_rpy_deg"
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,7 @@ class ObjectPoseConfig:
 class GraspsYamlData:
     grasps: list[dict]
     object_half_height_m: Optional[float]
+    pc_to_sim_frame_rpy_deg: Optional[tuple[float, float, float]]
 
 
 def load_grasps_yaml(path: Path) -> GraspsYamlData:
@@ -92,7 +103,15 @@ def load_grasps_yaml(path: Path) -> GraspsYamlData:
     half_height = doc.get(YAML_KEY_OBJECT_HALF_HEIGHT_M)
     if half_height is not None:
         half_height = float(half_height)
-    return GraspsYamlData(grasps=grasps, object_half_height_m=half_height)
+    rpy_key = doc.get(YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG)
+    pc_to_sim: Optional[tuple[float, float, float]] = None
+    if rpy_key is not None and isinstance(rpy_key, (list, tuple)) and len(rpy_key) == 3:
+        pc_to_sim = (float(rpy_key[0]), float(rpy_key[1]), float(rpy_key[2]))
+    return GraspsYamlData(
+        grasps=grasps,
+        object_half_height_m=half_height,
+        pc_to_sim_frame_rpy_deg=pc_to_sim,
+    )
 
 
 def resolve_object_pose(
@@ -149,15 +168,19 @@ def grasp_to_pose_stamped(
     T_world_object: np.ndarray,
     T_gripper_offset: np.ndarray,
     world_frame_id: str,
+    T_sim_from_pc: np.ndarray,
 ) -> PoseStamped:
-    """T_command = T_world_object @ T_obj_grasp @ T_gripper_offset (all 4x4)."""
+    """T_command = T_world_object @ T_sim_from_pc @ T_pc_grasp @ T_gripper_offset (4x4 chain)."""
     p = grasp.get("position") or [0.0, 0.0, 0.0]
     o = grasp.get("orientation") or [0.0, 0.0, 0.0, 1.0]
     T_obj_grasp = pose_to_matrix4(
         (float(p[0]), float(p[1]), float(p[2])),
         (float(o[0]), float(o[1]), float(o[2]), float(o[3])),
     )
-    T_world_grasp = matrix4_compose(T_world_object, T_obj_grasp)
+    T_world_grasp = matrix4_compose(
+        matrix4_compose(T_world_object, T_sim_from_pc),
+        T_obj_grasp,
+    )
     T_world_cmd = grasp_pose_world_to_link8_goal(T_world_grasp, T_gripper_offset)
     pos_world, quat_world = matrix4_to_pose(T_world_cmd)
     msg = PoseStamped()
@@ -237,6 +260,7 @@ def run(
     pc_centroid_shift_world_xyz: tuple[float, float, float],
     pc_centroid_shift_local_xyz: tuple[float, float, float],
     yaml_pose_frame: str,
+    sim_from_pc_frame_rpy_deg_cli: Optional[tuple[float, float, float]],
 ) -> int:
     logger = node.get_logger()
     try:
@@ -252,6 +276,24 @@ def run(
         logger.error("No grasps in YAML")
         append_execution_log(log_dir, str(yaml_path), 0, 0, 0, False, message="No grasps")
         return 1
+
+    if sim_from_pc_frame_rpy_deg_cli is not None:
+        align_rpy = sim_from_pc_frame_rpy_deg_cli
+        align_source = "CLI --sim-from-pc-frame-rpy-deg"
+    elif data.pc_to_sim_frame_rpy_deg is not None:
+        align_rpy = data.pc_to_sim_frame_rpy_deg
+        align_source = f"YAML {YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG}"
+    else:
+        align_rpy = (0.0, 0.0, 0.0)
+        align_source = "identity (no pc→sim rotation)"
+    T_sim_from_pc = (
+        matrix4_from_rpy_xyz(align_rpy, (0.0, 0.0, 0.0))
+        if any(abs(x) > 1e-9 for x in align_rpy)
+        else np.eye(4)
+    )
+    logger.info(
+        f"PC→sim object frame: rpy deg (intrinsic xyz) = {align_rpy} ({align_source})"
+    )
 
     try:
         object_pose = resolve_object_pose(
@@ -277,7 +319,8 @@ def run(
         f"Eval: user reference pos (m) = ({object_pose.x}, {object_pose.y}, {object_pose.z}); "
         f"effective PC centroid (m) = ({cx:.5f}, {cy:.5f}, {cz:.5f}); "
         f"object rpy deg = {object_rpy_deg}; frame = {WORLD_FRAME_ID}; "
-        f"yaml_pose_frame = {yaml_pose_frame} (MoveIt pose_link = panda_link8)"
+        f"yaml_pose_frame = {yaml_pose_frame} (must match launch cartesian_tip_link: "
+        f"default Isaac uses panda_hand + yaml-pose-frame link8 = identity TCP offset)"
     )
 
     if grasps:
@@ -287,7 +330,9 @@ def run(
             f"({float(g0[0]):.4f}, {float(g0[1]):.4f}, {float(g0[2]):.4f}) — "
             f"large X/Y means goal is offset from centroid (rim grasp), not centered over the mug."
         )
-        p0 = grasp_to_pose_stamped(grasps[0], T_world_object, T_gripper_offset, WORLD_FRAME_ID)
+        p0 = grasp_to_pose_stamped(
+            grasps[0], T_world_object, T_gripper_offset, WORLD_FRAME_ID, T_sim_from_pc,
+        )
         g = p0.pose
         logger.info(
             f"Grasp 1 command pose ({WORLD_FRAME_ID}): pos=({g.position.x:.5f}, {g.position.y:.5f}, {g.position.z:.5f}) "
@@ -308,7 +353,7 @@ def run(
 
     for i, g in enumerate(grasps):
         idx_1based = i + 1
-        pose = grasp_to_pose_stamped(g, T_world_object, T_gripper_offset, WORLD_FRAME_ID)
+        pose = grasp_to_pose_stamped(g, T_world_object, T_gripper_offset, WORLD_FRAME_ID, T_sim_from_pc)
         logger.info(f"Planning grasp {idx_1based}/{total}")
         success, msg = send_pose_and_wait(node, client, pose, plan_only=True, timeout_result=15.0)
         if success:
@@ -378,8 +423,9 @@ def main(args=None) -> int:
         type=str,
         choices=("hand", "link8"),
         default="link8",
-        help="link8 (default): send YAML 6D pose as panda_link8 goal (identity offset). "
-        "hand: right-multiply inv(URDF link8→panda_hand); experimental, only if GraspGen matches that frame.",
+        help="link8 (default): no URDF offset; YAML TCP matches launch cartesian_tip_link (Isaac default: panda_hand). "
+        "hand: right-multiply inv(link8→hand) so YAML hand frame becomes panda_link8 goal — use with "
+        "cartesian_tip_link:=panda_link8.",
     )
     parser.add_argument(
         "--gripper-offset-rpy-deg",
@@ -414,6 +460,15 @@ def main(args=None) -> int:
         help="Vector from your --object-center reference (e.g. Isaac prim) to the **point cloud centroid**, "
         "in mug-fixed axes (same convention as object rpy). Rotated by object rpy then added. "
         "Example: prim at bottom corner → centroid at center: set LY/LX ~ half-width in meters.",
+    )
+    parser.add_argument(
+        "--sim-from-pc-frame-rpy-deg",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("RX", "RY", "RZ"),
+        help="Fixed rotation from GraspGen/point-cloud frame to Isaac/sim object frame (intrinsic XYZ deg). "
+        "Overrides YAML pc_to_sim_frame_rpy_deg if both set. Typical Y-up mesh vs Z-up sim: try -90 0 0 or 90 0 0.",
     )
     parsed, unknown = parser.parse_known_args(args)
 
@@ -454,6 +509,14 @@ def main(args=None) -> int:
         else (0.0, 0.0, 0.0)
     )
 
+    sim_rpy_cli: Optional[tuple[float, float, float]] = None
+    if parsed.sim_from_pc_frame_rpy_deg is not None:
+        sim_rpy_cli = (
+            parsed.sim_from_pc_frame_rpy_deg[0],
+            parsed.sim_from_pc_frame_rpy_deg[1],
+            parsed.sim_from_pc_frame_rpy_deg[2],
+        )
+
     rclpy.init(args=unknown)
     node = rclpy.create_node("grasp_with_candidates")
     try:
@@ -470,6 +533,7 @@ def main(args=None) -> int:
             pc_centroid_shift_world_xyz=sw,
             pc_centroid_shift_local_xyz=sl,
             yaml_pose_frame=parsed.yaml_pose_frame,
+            sim_from_pc_frame_rpy_deg_cli=sim_rpy_cli,
         )
     finally:
         node.destroy_node()

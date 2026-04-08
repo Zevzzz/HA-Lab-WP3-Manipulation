@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
 Visualize grasps from a YAML file (from graspgen_request.py) with the point cloud.
+
+World axes at the origin use Open3D's coordinate frame: red = +X, green = +Y, blue = +Z
+(right-handed). Compare this triad to your Isaac / panda_link0 frame when checking conventions.
+
 Usage: python visualize_grasps.py Mug8192_grasps.yaml [Mug8192.ply]
        python visualize_grasps.py path/to/grasps.yaml --only-index 0
        python visualize_grasps.py path/to/grasps.yaml --pc path/to/pointcloud.ply
-Requires: open3d, pyyaml, numpy. For .ply: trimesh.
+       python visualize_grasps.py path/to/grasps.yaml --center-pointcloud
+       python visualize_grasps.py path/to/grasps.yaml --sim-from-pc-frame-rpy-deg -90 0 0
+
+Use the same ``--sim-from-pc-frame-rpy-deg`` as ``grasp_with_candidates`` (or rely on YAML
+``pc_to_sim_frame_rpy_deg``) so the mug geometry and grasp frames share the sim object axes.
+
+Requires: open3d, pyyaml, numpy, scipy. For .ply: trimesh.
 """
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import yaml
+from scipy.spatial.transform import Rotation
 
 try:
     import open3d as o3d
@@ -55,6 +67,28 @@ def pose_to_matrix(pos, ori) -> np.ndarray:
     return T
 
 
+YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG = "pc_to_sim_frame_rpy_deg"
+
+
+def rotation_matrix_from_rpy_xyz_deg(rpy_deg: tuple[float, float, float]) -> np.ndarray:
+    return Rotation.from_euler("xyz", list(rpy_deg), degrees=True).as_matrix()
+
+
+def resolve_sim_alignment_rpy(
+    yaml_doc: dict,
+    cli_rpy: Optional[tuple[float, float, float]],
+) -> tuple[Optional[tuple[float, float, float]], str]:
+    if cli_rpy is not None:
+        return cli_rpy, "CLI --sim-from-pc-frame-rpy-deg"
+    raw = yaml_doc.get(YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG)
+    if raw is not None and isinstance(raw, (list, tuple)) and len(raw) == 3:
+        return (
+            (float(raw[0]), float(raw[1]), float(raw[2])),
+            f"YAML {YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG}",
+        )
+    return None, ""
+
+
 def main():
     p = argparse.ArgumentParser(description="Visualize grasps YAML + point cloud")
     p.add_argument("yaml_path", type=Path, help="Grasps YAML (from graspgen_request.py)")
@@ -67,6 +101,48 @@ def main():
         metavar="I",
         help="Show only grasp at index I (0-based). E.g. grasp_with_candidates 'Candidate 1' -> --only-index 0",
     )
+    p.add_argument(
+        "--world-axis-length",
+        type=float,
+        default=0.12,
+        metavar="M",
+        help="Length (m) of RGB world axes at origin (default: 0.12)",
+    )
+    p.add_argument(
+        "--no-world-axes",
+        action="store_true",
+        help="Do not draw the world X/Y/Z triad at the origin",
+    )
+    p.add_argument(
+        "--grasp-frame-size",
+        type=float,
+        default=0.03,
+        metavar="M",
+        help="Size (m) of each grasp coordinate frame (default: 0.03)",
+    )
+    p.add_argument(
+        "--center-pointcloud",
+        action="store_true",
+        help="Subtract point cloud mean so origin matches GraspGen centroid frame (use if .ply was not saved centered)",
+    )
+    p.add_argument(
+        "--sim-from-pc-frame-rpy-deg",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("RX", "RY", "RZ"),
+        help="Legacy / runtime alignment: rotate centered cloud AND grasps (same as grasp_with_candidates). "
+        "Intrinsic XYZ deg. Overrides YAML pc_to_sim_frame_rpy_deg if both set.",
+    )
+    p.add_argument(
+        "--rotate-pc-only-rpy-deg",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("RX", "RY", "RZ"),
+        help="Use when YAML was built with graspgen_request --sim-frame-rpy-deg (grasps already in sim frame): "
+        "only rotate the point cloud to match; do not transform grasp frames.",
+    )
     args = p.parse_args()
 
     yaml_path = Path(args.yaml_path).resolve()
@@ -76,6 +152,25 @@ def main():
 
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
+    if args.sim_from_pc_frame_rpy_deg is not None and args.rotate_pc_only_rpy_deg is not None:
+        print("Use only one of --sim-from-pc-frame-rpy-deg and --rotate-pc-only-rpy-deg.", file=sys.stderr)
+        return 1
+
+    cli_align = None
+    if args.sim_from_pc_frame_rpy_deg is not None:
+        cli_align = (
+            float(args.sim_from_pc_frame_rpy_deg[0]),
+            float(args.sim_from_pc_frame_rpy_deg[1]),
+            float(args.sim_from_pc_frame_rpy_deg[2]),
+        )
+    align_rpy, align_source = resolve_sim_alignment_rpy(data, cli_align)
+    pc_only_rpy: Optional[tuple[float, float, float]] = None
+    if args.rotate_pc_only_rpy_deg is not None:
+        pc_only_rpy = (
+            float(args.rotate_pc_only_rpy_deg[0]),
+            float(args.rotate_pc_only_rpy_deg[1]),
+            float(args.rotate_pc_only_rpy_deg[2]),
+        )
     grasps_list = data.get("grasps") or []
     if not grasps_list:
         print("No grasps in YAML.", file=sys.stderr)
@@ -100,12 +195,45 @@ def main():
         print("Point cloud is empty.", file=sys.stderr)
         return 1
 
+    if args.center_pointcloud:
+        pts = np.asarray(pcd.points)
+        mean = pts.mean(axis=0)
+        pcd.points = o3d.utility.Vector3dVector(pts - mean)
+        print(f"Centered point cloud (subtracted mean {mean[0]:.6f}, {mean[1]:.6f}, {mean[2]:.6f}).")
+
+    T_sim_from_pc = np.eye(4)
+    transform_grasps = True
+    if pc_only_rpy is not None and any(abs(x) > 1e-9 for x in pc_only_rpy):
+        r_mat = rotation_matrix_from_rpy_xyz_deg(pc_only_rpy)
+        pts = np.asarray(pcd.points)
+        pcd.points = o3d.utility.Vector3dVector(pts @ r_mat.T)
+        transform_grasps = False
+        print(
+            f"PC-only rotation rpy deg {pc_only_rpy} (--rotate-pc-only-rpy-deg): "
+            "point cloud aligned to sim; grasp frames unchanged (YAML already sim-aligned)."
+        )
+    elif align_rpy is not None and any(abs(x) > 1e-9 for x in align_rpy):
+        r_mat = rotation_matrix_from_rpy_xyz_deg(align_rpy)
+        T_sim_from_pc[:3, :3] = r_mat
+        pts = np.asarray(pcd.points)
+        pcd.points = o3d.utility.Vector3dVector(pts @ r_mat.T)
+        print(
+            f"PC→sim rotation rpy deg {align_rpy} ({align_source}): "
+            "applied to point cloud and grasp frames (same as grasp_with_candidates)."
+        )
+
     if args.only_index is not None and args.max_grasps is not None:
         print("Use only one of --only-index and --max-grasps.", file=sys.stderr)
         return 1
 
-    frame_size = 0.03
+    frame_size = args.grasp_frame_size
     geoms = [pcd]
+
+    if not args.no_world_axes:
+        world_axes = o3d.geometry.TriangleMesh.create_coordinate_frame(
+            size=args.world_axis_length, origin=[0, 0, 0]
+        )
+        geoms.insert(0, world_axes)
 
     if args.only_index is not None:
         i = args.only_index
@@ -121,15 +249,21 @@ def main():
         g = grasps_list[i]
         pos = g["position"]
         ori = g["orientation"]
-        T = pose_to_matrix(pos, ori)
+        t_grasp = pose_to_matrix(pos, ori)
+        t_show = T_sim_from_pc @ t_grasp if transform_grasps else t_grasp
         frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=frame_size, origin=[0, 0, 0])
-        frame.transform(T)
+        frame.transform(t_show)
         geoms.append(frame)
 
     if args.only_index is not None:
         print(f"Showing point cloud + grasp index {args.only_index} only (of {len(grasps_list)}). Close window to exit.")
     else:
         print(f"Showing point cloud + {len(indices)} grasp frames (of {len(grasps_list)}). Close window to exit.")
+    if not args.no_world_axes:
+        print(
+            "World axes at origin: red = +X, green = +Y, blue = +Z (Open3D right-handed). "
+            "Grasp frames use the same RGB = local XYZ."
+        )
     o3d.visualization.draw_geometries(geoms, window_name="Grasps")
     return 0
 

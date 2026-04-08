@@ -2,3 +2,4 @@ timestamp_iso,yaml_path,total_candidates,candidate_index_used,num_failed_before,
 2026-03-17T02:35:03.411599Z,/path/to/grasps.yaml,0,0,0,False,Load error: /path/to/grasps.yaml
 2026-03-17T02:35:35.572138Z,/home/ros/data/Mug/Mug8192_grasps.yaml,0,0,0,False,Load error: /home/ros/data/Mug/Mug8192_grasps.yaml
 2026-03-17T02:35:40.845524Z,/home/ros/data/Mug/Mug8192_grasps.yaml,0,0,0,False,Load error: /home/ros/data/Mug/Mug8192_grasps.yaml
+2026-04-08T03:14:33.301582Z,/data/Mug/Mug_2011_grasps.yaml,0,0,0,False,Load error: /data/Mug/Mug_2011_grasps.yaml
