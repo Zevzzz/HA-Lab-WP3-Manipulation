@@ -2,3 +2,4 @@ timestamp_iso,yaml_path,total_candidates,candidate_index_used,num_failed_before,
 2026-04-08T03:15:04.661092Z,Mug_2011_grasps.yaml,50,1,0,True,Plan found.
 2026-04-08T03:16:33.371659Z,Mug_493_grasps.yaml,50,1,0,True,Plan found.
 2026-04-08T03:17:36.312024Z,Mug_5009_grasps.yaml,50,1,0,True,Plan found.
+2026-04-08T03:21:47.978571Z,Mug_5009_grasps.yaml,50,1,0,True,Plan found.

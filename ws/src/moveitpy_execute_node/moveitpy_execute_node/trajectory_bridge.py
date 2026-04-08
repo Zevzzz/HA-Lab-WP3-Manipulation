@@ -2,6 +2,8 @@
 """
 Trajectory bridge for Panda: implements FollowJointTrajectory action server
 and publishes interpolated joint commands to /joint_command for Isaac Sim.
+After each trajectory, idle publishing repeats the last commanded arm positions (setpoint hold),
+not /joint_states feedback, so the sim keeps applying corrective torque instead of drifting.
 """
 
 import bisect
@@ -50,6 +52,8 @@ class TrajectoryBridgeNode(Node):
             self._old_sigint = None
         self._pub = self.create_publisher(JointState, "/joint_command", 10)
         self._state_lock = threading.Lock()
+        self._hold_lock = threading.Lock()
+        self._hold_arm_positions: list[float] | None = None
         self._latest_position: dict = {}
         self._latest_velocity: dict = {}
         self._gripper_target: float = GRIPPER_OPEN
@@ -184,16 +188,29 @@ class TrajectoryBridgeNode(Node):
             [0.0, 0.0],
         )
         self._pub.publish(msg)
+        with self._hold_lock:
+            self._hold_arm_positions = [pos_final.get(n, 0.0) for n in PANDA_ARM_JOINTS]
 
     def _idle_cb(self) -> None:
-        """Publish current arm + gripper target when not executing a trajectory."""
+        """Hold last commanded arm setpoint (not measured state) so Isaac keeps applying PD."""
         if self._executing:
+            return
+        g = self._gripper_target
+        with self._hold_lock:
+            hold = list(self._hold_arm_positions) if self._hold_arm_positions is not None else None
+        if hold is not None:
+            msg = self._build_joint_state_msg(
+                hold,
+                [0.0] * len(PANDA_ARM_JOINTS),
+                [g, g],
+                [0.0, 0.0],
+            )
+            self._pub.publish(msg)
             return
         with self._state_lock:
             if not all(j in self._latest_position for j in PANDA_ARM_JOINTS):
                 return
         arm_pos, arm_vel = self._get_arm_state()
-        g = self._gripper_target
         msg = self._build_joint_state_msg(arm_pos, arm_vel, [g, g], [0.0, 0.0])
         self._pub.publish(msg)
 
