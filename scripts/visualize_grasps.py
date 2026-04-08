@@ -2,6 +2,7 @@
 """
 Visualize grasps from a YAML file (from graspgen_request.py) with the point cloud.
 Usage: python visualize_grasps.py Mug8192_grasps.yaml [Mug8192.ply]
+       python visualize_grasps.py path/to/grasps.yaml --only-index 0
        python visualize_grasps.py path/to/grasps.yaml --pc path/to/pointcloud.ply
 Requires: open3d, pyyaml, numpy. For .ply: trimesh.
 """
@@ -59,6 +60,13 @@ def main():
     p.add_argument("yaml_path", type=Path, help="Grasps YAML (from graspgen_request.py)")
     p.add_argument("pc_path", type=Path, nargs="?", default=None, help="Point cloud .ply or .npy (default: same stem as yaml with .ply)")
     p.add_argument("--max-grasps", type=int, default=None, metavar="N", help="Show at most N grasp frames (default: all)")
+    p.add_argument(
+        "--only-index",
+        type=int,
+        default=None,
+        metavar="I",
+        help="Show only grasp at index I (0-based). E.g. grasp_with_candidates 'Candidate 1' -> --only-index 0",
+    )
     args = p.parse_args()
 
     yaml_path = Path(args.yaml_path).resolve()
@@ -92,10 +100,24 @@ def main():
         print("Point cloud is empty.", file=sys.stderr)
         return 1
 
+    if args.only_index is not None and args.max_grasps is not None:
+        print("Use only one of --only-index and --max-grasps.", file=sys.stderr)
+        return 1
+
     frame_size = 0.03
     geoms = [pcd]
-    n = len(grasps_list) if args.max_grasps is None else min(args.max_grasps, len(grasps_list))
-    for i in range(n):
+
+    if args.only_index is not None:
+        i = args.only_index
+        if i < 0 or i >= len(grasps_list):
+            print(f"--only-index {i} out of range [0, {len(grasps_list) - 1}].", file=sys.stderr)
+            return 1
+        indices = [i]
+    else:
+        n = len(grasps_list) if args.max_grasps is None else min(args.max_grasps, len(grasps_list))
+        indices = list(range(n))
+
+    for i in indices:
         g = grasps_list[i]
         pos = g["position"]
         ori = g["orientation"]
@@ -104,7 +126,10 @@ def main():
         frame.transform(T)
         geoms.append(frame)
 
-    print(f"Showing point cloud + {n} grasp frames (of {len(grasps_list)}). Close window to exit.")
+    if args.only_index is not None:
+        print(f"Showing point cloud + grasp index {args.only_index} only (of {len(grasps_list)}). Close window to exit.")
+    else:
+        print(f"Showing point cloud + {len(indices)} grasp frames (of {len(grasps_list)}). Close window to exit.")
     o3d.visualization.draw_geometries(geoms, window_name="Grasps")
     return 0
 

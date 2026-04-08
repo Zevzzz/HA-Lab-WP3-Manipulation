@@ -60,11 +60,15 @@ def generate_launch_description():
         .to_moveit_configs()
     )
 
+    # Allow table-height grasps (z ~ 0.05–0.2). ValidateWorkspaceBounds default often has z_min=0.2.
+    move_group_params = moveit_config.to_dict()
+    move_group_params["default_workspace_bounds"] = 0.6  # half-extent (m) for cubic workspace
+
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
         output="screen",
-        parameters=[moveit_config.to_dict()],
+        parameters=[move_group_params],
     )
 
     robot_state_publisher = Node(

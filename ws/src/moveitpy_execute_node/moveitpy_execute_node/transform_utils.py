@@ -50,3 +50,68 @@ def translation_matrix(x: float, y: float, z: float) -> np.ndarray:
     T = np.eye(4)
     T[:3, 3] = (x, y, z)
     return T
+
+
+def matrix4_compose(T_a_b: np.ndarray, T_b_c: np.ndarray) -> np.ndarray:
+    """Compose transforms: T_a_c = T_a_b @ T_b_c."""
+    return T_a_b @ T_b_c
+
+
+def world_object_matrix_from_position_rpy(
+    x: float,
+    y: float,
+    z: float,
+    rpy_deg: Tuple[float, float, float],
+) -> np.ndarray:
+    """
+    Pose of object (centroid) frame in world (panda_link0).
+
+    Rotation order: intrinsic XYZ (degrees), translation = object center in world.
+    Use (0,0,yaw) for a vertical mug rotated about world +Z only.
+    """
+    rx, ry, rz = rpy_deg
+    r = Rotation.from_euler("xyz", [rx, ry, rz], degrees=True)
+    T = np.eye(4)
+    T[:3, :3] = r.as_matrix()
+    T[:3, 3] = (x, y, z)
+    return T
+
+
+def matrix4_from_rpy_xyz(
+    rpy_deg: Tuple[float, float, float],
+    translation: Tuple[float, float, float],
+) -> np.ndarray:
+    """Fixed SE(3) from Euler XYZ (degrees) + translation (intrinsic XYZ order)."""
+    rx, ry, rz = rpy_deg
+    r = Rotation.from_euler("xyz", [rx, ry, rz], degrees=True)
+    T = np.eye(4)
+    T[:3, :3] = r.as_matrix()
+    T[:3, 3] = translation
+    return T
+
+
+def franka_T_link8_to_panda_hand() -> np.ndarray:
+    """
+    URDF panda_hand_joint: child panda_hand in parent panda_link8, rpy = (0, 0, -45°), xyz = 0.
+
+    GraspGen Franka poses align with the hand / tool convention, not the bare flange.
+    MoveIt pose_link is panda_link8 → goal: T_world_link8 = T_world_grasp @ inv(this).
+    """
+    return matrix4_from_rpy_xyz((0.0, 0.0, -45.0), (0.0, 0.0, 0.0))
+
+
+def grasp_pose_world_to_link8_goal(
+    T_world_grasp: np.ndarray,
+    T_grasp_to_link8: np.ndarray,
+) -> np.ndarray:
+    """
+    Convert GraspGen/tool TCP pose in world to panda_link8 goal in world.
+
+    T_world_grasp: 4x4, grasp frame in world (from YAML + object pose).
+    T_grasp_to_link8: constant 4x4 such that p_w = T_world_grasp @ p_g and
+    p_w = T_world_link8 @ p_l with T_world_link8 = T_world_grasp @ T_grasp_to_link8.
+
+    Equivalently: same world point expressed from grasp origin vs link8 origin
+    for the rigid offset between GraspGen TCP and MoveIt pose_link (panda_link8).
+    """
+    return matrix4_compose(T_world_grasp, T_grasp_to_link8)

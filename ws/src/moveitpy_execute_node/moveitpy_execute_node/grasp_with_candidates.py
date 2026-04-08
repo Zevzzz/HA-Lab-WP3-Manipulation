@@ -1,14 +1,28 @@
 """
-One-shot client: load grasps YAML (object frame), transform to world frame, try ExecutePose.
+GraspGen eval client: YAML grasp (object frame) -> world pose -> ExecutePose.
 
-Grasps in the YAML are in object frame (origin = object centroid). Object pose in world
-is derived from table height + object_half_height_m in YAML, or from --object-center.
+Transform chain:
+  T_world_grasp   = T_world_object @ T_object_grasp
+  T_world_command = T_world_grasp @ T_gripper_offset   (default: identity)
 
-Usage:
-  ros2 run moveitpy_execute_node grasp_with_candidates --path <path_to_yaml> [options]
+MoveIt pose_link: `panda_pose_goal_isaac.launch.py` defaults `cartesian_tip_link:=panda_hand` so goals
+are interpreted as **panda_hand** (pair with `--yaml-pose-frame link8`, i.e. no extra offset, for
+typical GraspGen YAML). Non-Isaac / flange workflows: launch with `cartesian_tip_link:=panda_link8` and
+use `--yaml-pose-frame hand` to convert hand→flange via URDF.
 
-Expects the executor node (ExecutePose action server) to be running. Logs one row to
-data/logs/grasp_execution_results.csv (or --log-dir).
+A pure rotation offset does **not** change goal **translation**; wrong XY vs the mug is usually YAML
+position in the object frame or prim-vs-centroid frame mismatch (`--pc-centroid-shift-*`).
+
+CRITICAL — two different "object origins":
+  • Grasp YAML / GraspGen use the **point cloud centroid** frame (mean-centered .ply / .npy).
+  • Isaac / USD often place the asset with origin at **base corner, bbox min, etc.** — NOT the centroid.
+
+If you pass the prim's world position as --object-center but grasps are in the **centroid** frame,
+every goal is shifted by (prim → centroid) in the horizontal plane → gripper lands **beside** the mug
+even when the math is otherwise correct. Fix with --pc-centroid-shift-local-xyz (or measure true
+centroid in world and pass that as --object-center).
+
+Expects executor_node (ExecutePose). Appends one row to grasp_execution_results.csv.
 """
 
 from __future__ import annotations
@@ -21,35 +35,40 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import rclpy
+import yaml
+from geometry_msgs.msg import PoseStamped
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
-import numpy as np
-import yaml
 
 from moveitpy_execute_node_msgs.action import ExecutePose
 
 from .constants import FRAME_ID as WORLD_FRAME_ID
-from .transform_utils import transform_pose, translation_matrix
+from scipy.spatial.transform import Rotation
+
+from .transform_utils import (
+    franka_T_link8_to_panda_hand,
+    grasp_pose_world_to_link8_goal,
+    matrix4_compose,
+    matrix4_from_rpy_xyz,
+    matrix4_to_pose,
+    pose_to_matrix4,
+    world_object_matrix_from_position_rpy,
+)
 
 ACTION_NAME = "execute_pose"
 DEFAULT_LOG_DIR = Path("data/logs")
 EXECUTION_LOG_NAME = "grasp_execution_results.csv"
 
-# Default eval setup: object centered on table at (x, y); table surface at table_z.
-# Object center z = table_z + object_half_height_m (from YAML).
 DEFAULT_TABLE_Z_M = 0.05
 DEFAULT_OBJECT_X_M = 0.4
 DEFAULT_OBJECT_Y_M = 0.0
-
-# YAML key written by graspgen_request (must match scripts/graspgen_request.py)
 YAML_KEY_OBJECT_HALF_HEIGHT_M = "object_half_height_m"
 
 
 @dataclass(frozen=True)
 class ObjectPoseConfig:
-    """Object center position in world frame (meters). Rotation is identity (upright)."""
     x: float
     y: float
     z: float
@@ -57,13 +76,11 @@ class ObjectPoseConfig:
 
 @dataclass(frozen=True)
 class GraspsYamlData:
-    """Parsed grasps YAML: grasps in object frame + optional object_half_height_m."""
     grasps: list[dict]
     object_half_height_m: Optional[float]
 
 
 def load_grasps_yaml(path: Path) -> GraspsYamlData:
-    """Load YAML: grasps list (object frame) and optional object_half_height_m."""
     path = Path(path).resolve()
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -85,12 +102,6 @@ def resolve_object_pose(
     object_half_height_m: Optional[float],
     object_center_override: Optional[tuple[float, float, float]],
 ) -> ObjectPoseConfig:
-    """
-    Resolve object center in world frame.
-
-    If object_center_override (x,y,z) is set, use it. Else require object_half_height_m
-    and set center z = table_z + object_half_height_m, x/y = object_x, object_y.
-    """
     if object_center_override is not None:
         return ObjectPoseConfig(
             x=object_center_override[0],
@@ -99,8 +110,7 @@ def resolve_object_pose(
         )
     if object_half_height_m is None:
         raise ValueError(
-            "YAML has no 'object_half_height_m'. Either regenerate the YAML with graspgen_request.py "
-            "(which writes it automatically) or pass --object-center x y z."
+            "YAML has no 'object_half_height_m'. Regenerate with graspgen_request.py or pass --object-center x y z."
         )
     return ObjectPoseConfig(
         x=object_x,
@@ -109,17 +119,47 @@ def resolve_object_pose(
     )
 
 
-def grasp_object_frame_to_pose_stamped(
+def effective_object_centroid_world_m(
+    base: ObjectPoseConfig,
+    object_rpy_deg: tuple[float, float, float],
+    shift_world_xyz: tuple[float, float, float],
+    shift_local_xyz: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """
+    World position of the **point cloud centroid** (GraspGen frame origin).
+
+    base: user-supplied "object" position (often wrong: Isaac prim / mesh root).
+    shift_world_xyz: added in panda_link0 (e.g. hand-tuned nudge).
+    shift_local_xyz: vector from that reference to **centroid**, in axes that rotate with object_rpy
+    (mug-fixed frame with same Euler XYZ as --object-rpy-deg); rotated into world then added.
+    """
+    rx, ry, rz = object_rpy_deg
+    R = Rotation.from_euler("xyz", [rx, ry, rz], degrees=True).as_matrix()
+    local = np.array(shift_local_xyz, dtype=float)
+    world_shift = R @ local
+    return (
+        base.x + shift_world_xyz[0] + float(world_shift[0]),
+        base.y + shift_world_xyz[1] + float(world_shift[1]),
+        base.z + shift_world_xyz[2] + float(world_shift[2]),
+    )
+
+
+def grasp_to_pose_stamped(
     grasp: dict,
     T_world_object: np.ndarray,
+    T_gripper_offset: np.ndarray,
     world_frame_id: str,
 ) -> PoseStamped:
-    """Transform one object-frame grasp to world-frame PoseStamped."""
+    """T_command = T_world_object @ T_obj_grasp @ T_gripper_offset (all 4x4)."""
     p = grasp.get("position") or [0.0, 0.0, 0.0]
     o = grasp.get("orientation") or [0.0, 0.0, 0.0, 1.0]
-    pos_obj = (float(p[0]), float(p[1]), float(p[2]))
-    quat_obj = (float(o[0]), float(o[1]), float(o[2]), float(o[3]))
-    pos_world, quat_world = transform_pose(T_world_object, pos_obj, quat_obj)
+    T_obj_grasp = pose_to_matrix4(
+        (float(p[0]), float(p[1]), float(p[2])),
+        (float(o[0]), float(o[1]), float(o[2]), float(o[3])),
+    )
+    T_world_grasp = matrix4_compose(T_world_object, T_obj_grasp)
+    T_world_cmd = grasp_pose_world_to_link8_goal(T_world_grasp, T_gripper_offset)
+    pos_world, quat_world = matrix4_to_pose(T_world_cmd)
     msg = PoseStamped()
     msg.header.frame_id = world_frame_id
     msg.pose.position.x = pos_world[0]
@@ -140,7 +180,6 @@ def send_pose_and_wait(
     timeout_send: float = 5.0,
     timeout_result: float = 60.0,
 ):
-    """Send ExecutePose goal and wait for result. Returns (success, message)."""
     pose.header.stamp = node.get_clock().now().to_msg()
     goal_msg = ExecutePose.Goal()
     goal_msg.target_pose = pose
@@ -170,7 +209,6 @@ def append_execution_log(
     success: bool,
     message: str = "",
 ) -> None:
-    """Append one row to grasp_execution_results.csv."""
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / EXECUTION_LOG_NAME
@@ -194,17 +232,18 @@ def run(
     object_x: float,
     object_y: float,
     object_center_override: Optional[tuple[float, float, float]],
+    object_rpy_deg: tuple[float, float, float],
+    T_gripper_offset: np.ndarray,
+    pc_centroid_shift_world_xyz: tuple[float, float, float],
+    pc_centroid_shift_local_xyz: tuple[float, float, float],
+    yaml_pose_frame: str,
 ) -> int:
-    """Load YAML, resolve object pose, transform grasps to world frame, try candidates."""
     logger = node.get_logger()
     try:
         data = load_grasps_yaml(yaml_path)
     except Exception as e:
         logger.error(f"Failed to load YAML: {e}")
-        append_execution_log(
-            log_dir, str(yaml_path), 0, 0, 0, False,
-            message=f"Load error: {e}",
-        )
+        append_execution_log(log_dir, str(yaml_path), 0, 0, 0, False, message=f"Load error: {e}")
         return 1
 
     grasps = data.grasps
@@ -224,25 +263,42 @@ def run(
         )
     except ValueError as e:
         logger.error(str(e))
-        append_execution_log(
-            log_dir, str(yaml_path), total, 0, 0, False,
-            message=str(e),
-        )
+        append_execution_log(log_dir, str(yaml_path), total, 0, 0, False, message=str(e))
         return 1
 
-    T_world_object = translation_matrix(object_pose.x, object_pose.y, object_pose.z)
-    logger.info(
-        f"Object center in world: ({object_pose.x}, {object_pose.y}, {object_pose.z})"
+    cx, cy, cz = effective_object_centroid_world_m(
+        object_pose,
+        object_rpy_deg,
+        pc_centroid_shift_world_xyz,
+        pc_centroid_shift_local_xyz,
     )
+    T_world_object = world_object_matrix_from_position_rpy(cx, cy, cz, object_rpy_deg)
+    logger.info(
+        f"Eval: user reference pos (m) = ({object_pose.x}, {object_pose.y}, {object_pose.z}); "
+        f"effective PC centroid (m) = ({cx:.5f}, {cy:.5f}, {cz:.5f}); "
+        f"object rpy deg = {object_rpy_deg}; frame = {WORLD_FRAME_ID}; "
+        f"yaml_pose_frame = {yaml_pose_frame} (MoveIt pose_link = panda_link8)"
+    )
+
+    if grasps:
+        g0 = grasps[0].get("position") or [0.0, 0.0, 0.0]
+        logger.info(
+            f"Grasp 1 YAML position in **object/centroid** frame (m): "
+            f"({float(g0[0]):.4f}, {float(g0[1]):.4f}, {float(g0[2]):.4f}) — "
+            f"large X/Y means goal is offset from centroid (rim grasp), not centered over the mug."
+        )
+        p0 = grasp_to_pose_stamped(grasps[0], T_world_object, T_gripper_offset, WORLD_FRAME_ID)
+        g = p0.pose
+        logger.info(
+            f"Grasp 1 command pose ({WORLD_FRAME_ID}): pos=({g.position.x:.5f}, {g.position.y:.5f}, {g.position.z:.5f}) "
+            f"quat_xyzw=({g.orientation.x:.4f}, {g.orientation.y:.4f}, {g.orientation.z:.4f}, {g.orientation.w:.4f})"
+        )
 
     client = ActionClient(node, ExecutePose, ACTION_NAME)
     logger.info(f"Waiting for action server '{ACTION_NAME}'...")
     if not client.wait_for_server(timeout_sec=10.0):
         logger.error("Action server not available. Is the executor node running?")
-        append_execution_log(
-            log_dir, str(yaml_path), total, 0, 0, False,
-            message="Action server not available",
-        )
+        append_execution_log(log_dir, str(yaml_path), total, 0, 0, False, message="Action server not available")
         return 1
 
     candidate_index_used = 0
@@ -250,80 +306,153 @@ def run(
     last_message = ""
     winning_pose: Optional[PoseStamped] = None
 
-    # Phase 1: plan-only until one candidate plans successfully
     for i, g in enumerate(grasps):
         idx_1based = i + 1
-        pose = grasp_object_frame_to_pose_stamped(g, T_world_object, WORLD_FRAME_ID)
-        logger.info(f"Planning candidate {idx_1based}/{total}")
+        pose = grasp_to_pose_stamped(g, T_world_object, T_gripper_offset, WORLD_FRAME_ID)
+        logger.info(f"Planning grasp {idx_1based}/{total}")
         success, msg = send_pose_and_wait(node, client, pose, plan_only=True, timeout_result=15.0)
         if success:
             candidate_index_used = idx_1based
             num_failed_before = i
             winning_pose = pose
             last_message = msg or "Plan found."
-            logger.info(f"Candidate {idx_1based} planned successfully, executing once.")
+            logger.info(f"Grasp {idx_1based} planned OK, executing.")
             break
         last_message = msg
-        logger.warning(f"Candidate {idx_1based} failed: {msg}")
+        logger.warning(f"Grasp {idx_1based} failed: {msg}")
 
-    # Phase 2: execute the winning plan once (if we have one)
     if winning_pose is not None:
         exec_ok, msg = send_pose_and_wait(node, client, winning_pose, plan_only=False)
         if not exec_ok:
             success = False
             last_message = msg or "Execution failed."
-            logger.error(f"Execution failed after successful plan: {last_message}")
+            logger.error(f"Execution failed: {last_message}")
         else:
             success = True
             last_message = last_message or "OK"
     else:
         success = False
+
     append_execution_log(
         log_dir, str(yaml_path), total, candidate_index_used, num_failed_before, success, last_message,
     )
     logger.info(
-        f"Logged: yaml={yaml_path}, total={total}, used={candidate_index_used}, failed_before={num_failed_before}, success={success}"
+        f"Logged: yaml={yaml_path}, used_grasp={candidate_index_used}, success={success}"
     )
     return 0 if success else 1
 
 
 def main(args=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Load grasps YAML (object frame), transform to world, try ExecutePose; log to CSV.",
+        description="GraspGen eval: object-frame YAML -> panda_link0 pose -> ExecutePose (YAML order).",
     )
-    parser.add_argument("--path", type=Path, required=True, help="Path to grasps YAML")
-    parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR, help="Directory for execution log CSV")
-    parser.add_argument(
-        "--table-z",
-        type=float,
-        default=DEFAULT_TABLE_Z_M,
-        help=f"Table surface z in world frame (m). Object center z = table_z + object_half_height_m (default: {DEFAULT_TABLE_Z_M})",
-    )
-    parser.add_argument(
-        "--object-x",
-        type=float,
-        default=DEFAULT_OBJECT_X_M,
-        help=f"Object center x in world frame (m) (default: {DEFAULT_OBJECT_X_M})",
-    )
-    parser.add_argument(
-        "--object-y",
-        type=float,
-        default=DEFAULT_OBJECT_Y_M,
-        help=f"Object center y in world frame (m) (default: {DEFAULT_OBJECT_Y_M})",
-    )
+    parser.add_argument("--path", type=Path, required=True, help="Grasps YAML")
+    parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR, help="CSV log directory")
+    parser.add_argument("--table-z", type=float, default=DEFAULT_TABLE_Z_M, help="Table z if using half-height from YAML")
+    parser.add_argument("--object-x", type=float, default=DEFAULT_OBJECT_X_M, help="Object center x (without --object-center)")
+    parser.add_argument("--object-y", type=float, default=DEFAULT_OBJECT_Y_M, help="Object center y (without --object-center)")
     parser.add_argument(
         "--object-center",
         nargs=3,
         type=float,
         default=None,
         metavar=("X", "Y", "Z"),
-        help="Override object center in world (m). If set, ignores --table-z/--object-x/--object-y and object_half_height_m",
+        help="Object centroid in panda_link0 (m). Preferred for eval when you read this from sim.",
+    )
+    parser.add_argument(
+        "--object-yaw-deg",
+        type=float,
+        default=None,
+        help="Spin object frame about world +Z at centroid (deg). Same as --object-rpy-deg 0 0 YAW.",
+    )
+    parser.add_argument(
+        "--object-rpy-deg",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("RX", "RY", "RZ"),
+        help="Full object orientation Euler XYZ deg (overrides --object-yaw-deg if both set).",
+    )
+    parser.add_argument(
+        "--yaml-pose-frame",
+        type=str,
+        choices=("hand", "link8"),
+        default="link8",
+        help="link8 (default): send YAML 6D pose as panda_link8 goal (identity offset). "
+        "hand: right-multiply inv(URDF link8→panda_hand); experimental, only if GraspGen matches that frame.",
+    )
+    parser.add_argument(
+        "--gripper-offset-rpy-deg",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("RX", "RY", "RZ"),
+        help="Extra T_cmd = T_grasp @ offset after yaml-pose-frame (Euler XYZ deg). Rare.",
+    )
+    parser.add_argument(
+        "--gripper-offset-xyz",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("DX", "DY", "DZ"),
+        help="Translation part of gripper offset (m), with --gripper-offset-rpy-deg.",
+    )
+    parser.add_argument(
+        "--pc-centroid-shift-world-xyz",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("DX", "DY", "DZ"),
+        help="Add this delta in panda_link0 (m) after resolving centroid (rare; use local shift first).",
+    )
+    parser.add_argument(
+        "--pc-centroid-shift-local-xyz",
+        nargs=3,
+        type=float,
+        default=None,
+        metavar=("LX", "LY", "LZ"),
+        help="Vector from your --object-center reference (e.g. Isaac prim) to the **point cloud centroid**, "
+        "in mug-fixed axes (same convention as object rpy). Rotated by object rpy then added. "
+        "Example: prim at bottom corner → centroid at center: set LY/LX ~ half-width in meters.",
     )
     parsed, unknown = parser.parse_known_args(args)
 
     object_center_override: Optional[tuple[float, float, float]] = None
     if parsed.object_center is not None:
         object_center_override = (parsed.object_center[0], parsed.object_center[1], parsed.object_center[2])
+
+    if parsed.object_rpy_deg is not None:
+        object_rpy_deg = (parsed.object_rpy_deg[0], parsed.object_rpy_deg[1], parsed.object_rpy_deg[2])
+    elif parsed.object_yaw_deg is not None:
+        object_rpy_deg = (0.0, 0.0, parsed.object_yaw_deg)
+    else:
+        object_rpy_deg = (0.0, 0.0, 0.0)
+
+    if parsed.gripper_offset_rpy_deg is not None:
+        xyz = parsed.gripper_offset_xyz if parsed.gripper_offset_xyz is not None else (0.0, 0.0, 0.0)
+        T_user = matrix4_from_rpy_xyz(
+            (parsed.gripper_offset_rpy_deg[0], parsed.gripper_offset_rpy_deg[1], parsed.gripper_offset_rpy_deg[2]),
+            (xyz[0], xyz[1], xyz[2]),
+        )
+    else:
+        T_user = np.eye(4)
+
+    if parsed.yaml_pose_frame == "link8":
+        T_base = np.eye(4)
+    else:
+        T_base = np.linalg.inv(franka_T_link8_to_panda_hand())
+    T_gripper_offset = matrix4_compose(T_base, T_user)
+
+    sw = (
+        tuple(parsed.pc_centroid_shift_world_xyz)
+        if parsed.pc_centroid_shift_world_xyz is not None
+        else (0.0, 0.0, 0.0)
+    )
+    sl = (
+        tuple(parsed.pc_centroid_shift_local_xyz)
+        if parsed.pc_centroid_shift_local_xyz is not None
+        else (0.0, 0.0, 0.0)
+    )
 
     rclpy.init(args=unknown)
     node = rclpy.create_node("grasp_with_candidates")
@@ -336,6 +465,11 @@ def main(args=None) -> int:
             object_x=parsed.object_x,
             object_y=parsed.object_y,
             object_center_override=object_center_override,
+            object_rpy_deg=object_rpy_deg,
+            T_gripper_offset=T_gripper_offset,
+            pc_centroid_shift_world_xyz=sw,
+            pc_centroid_shift_local_xyz=sl,
+            yaml_pose_frame=parsed.yaml_pose_frame,
         )
     finally:
         node.destroy_node()

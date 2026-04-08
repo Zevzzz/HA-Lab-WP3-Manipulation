@@ -58,6 +58,18 @@ Host `./data` is mounted at **`/home/ros/data`** only. From inside the container
 **scripts/venv**  
 Use `source scripts/venv/bin/activate` when running **scripts/graspgen_request.py** or the GraspGen server on the host (pyzmq, msgpack, PyYAML, trimesh).
 
+## Troubleshooting
+
+### All grasp candidates fail with "Planning failed"
+
+If **every** candidate fails in a few milliseconds with "Planning failed", the cause is usually **MoveIt’s planning workspace bounds**, not the grasps themselves.
+
+- **What happens:** Object center is at table height (e.g. `z = table_z + object_half_height_m` ≈ 0.11 m). Grasp goals end up at z ≈ 0.05–0.17 m. MoveIt’s **ValidateWorkspaceBounds** adapter uses a default planning volume that often has a **minimum z of 0.2 m**, so all goals are rejected as out of bounds before any path is planned.
+- **What to do:**
+  1. **Raise the table in the scene** so the object center is at least ~0.2 m: use `--table-z 0.15` (or higher) when running `grasp_with_candidates`, and match the table height in Isaac Sim. Example: `ros2 run moveitpy_execute_node grasp_with_candidates --path ~/data/Mug/Mug8192_grasps.yaml --table-z 0.15`
+  2. **Or** use a launch that sets workspace bounds to include the table (see below). The Isaac launch in this repo sets `default_workspace_bounds` so that table-height goals (z from 0.05 m up) are allowed.
+- **Check executor logs:** On the terminal where you ran `ros2 launch ... panda_pose_goal_isaac.launch.py`, look for MoveIt messages about "ValidateWorkspaceBounds", "CheckStartStateBounds", or "planning volume"; they confirm workspace or start-state rejections.
+
 ## TODO
 - Potential tech debt – custom trajectory bridge instead of stock
 - Integrate GraspGen

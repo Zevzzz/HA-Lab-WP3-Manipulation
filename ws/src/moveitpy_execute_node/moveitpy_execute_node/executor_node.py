@@ -11,6 +11,7 @@ import rclpy
 from rclpy.action import ActionServer
 from rclpy.node import Node
 
+from .constants import TIP_LINK
 from .motion import PoseExecutor
 
 
@@ -27,7 +28,12 @@ class ExecutorNode(Node):
 
     def __init__(self, *, node_name: str = DEFAULT_NODE_NAME) -> None:
         super().__init__(node_name)
-        self._executor = PoseExecutor(self)
+        self.declare_parameter("cartesian_tip_link", TIP_LINK)
+        tip = self.get_parameter("cartesian_tip_link").get_parameter_value().string_value
+        if not tip:
+            tip = TIP_LINK
+        self._executor = PoseExecutor(self, tip_link=tip)
+        self.get_logger().info(f"ExecutePose Cartesian pose_link={tip}")
         self._action_server = ActionServer(
             self,
             ExecutePose,

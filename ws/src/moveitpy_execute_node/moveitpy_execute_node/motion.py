@@ -27,8 +27,9 @@ class PoseExecutor:
     uses the node name to find that node and its params.
     """
 
-    def __init__(self, node: Node) -> None:
+    def __init__(self, node: Node, *, tip_link: str | None = None) -> None:
         self._node = node
+        self._tip_link = tip_link or TIP_LINK
         self._robot = MoveItPy(node_name=node.get_name())
         self._arm = self._robot.get_planning_component(PLANNING_GROUP)
 
@@ -39,7 +40,7 @@ class PoseExecutor:
         Caller can then call execute_trajectory(plan_result.trajectory).
         """
         self._arm.set_start_state_to_current_state()
-        self._arm.set_goal_state(pose_stamped_msg=pose, pose_link=TIP_LINK)
+        self._arm.set_goal_state(pose_stamped_msg=pose, pose_link=self._tip_link)
         plan_result = self._arm.plan()
         return plan_result if plan_result else None
 

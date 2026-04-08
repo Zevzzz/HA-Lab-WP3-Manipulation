@@ -73,11 +73,15 @@ def generate_launch_description():
 
     use_sim_time = {"use_sim_time": True}
 
+    # Allow table-height grasps (z ~ 0.05–0.2). ValidateWorkspaceBounds default often has z_min=0.2.
+    move_group_params = moveit_config.to_dict()
+    move_group_params["default_workspace_bounds"] = 0.6  # half-extent (m) for cubic workspace
+
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
         output="screen",
-        parameters=[moveit_config.to_dict(), use_sim_time],
+        parameters=[move_group_params, use_sim_time],
     )
 
     robot_state_publisher = Node(
@@ -131,6 +135,13 @@ def generate_launch_description():
         parameters=[use_sim_time],
     )
 
+    cartesian_tip_link_arg = DeclareLaunchArgument(
+        "cartesian_tip_link",
+        default_value="panda_hand",
+        description="ExecutePose / MoveIt pose_link: panda_hand matches GraspGen hand-frame YAML with "
+        "grasp_with_candidates --yaml-pose-frame link8 (identity offset). Use panda_link8 for flange goals.",
+    )
+
     executor_node = Node(
         package="moveitpy_execute_node",
         executable="executor_node",
@@ -140,6 +151,7 @@ def generate_launch_description():
             moveit_config.to_dict(),
             moveit_cpp_params,
             use_sim_time,
+            {"cartesian_tip_link": LaunchConfiguration("cartesian_tip_link")},
         ],
     )
 
@@ -169,6 +181,7 @@ def generate_launch_description():
     return LaunchDescription([
         use_rviz_arg,
         demo_arg,
+        cartesian_tip_link_arg,
         static_tf_node,
         robot_state_publisher,
         move_group_node,
