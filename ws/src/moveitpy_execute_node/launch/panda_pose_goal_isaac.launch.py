@@ -84,6 +84,20 @@ def generate_launch_description():
         parameters=[move_group_params, use_sim_time],
     )
 
+    add_ground_collision_arg = DeclareLaunchArgument(
+        "add_ground_collision",
+        default_value="true",
+        description="Add a planning-scene box at z=0 (panda_link0) so paths cannot go through the floor.",
+    )
+    ground_plane_scene_node = Node(
+        package="moveitpy_execute_node",
+        executable="ground_plane_scene",
+        name="ground_plane_scene",
+        output="log",
+        parameters=[use_sim_time],
+        condition=IfCondition(LaunchConfiguration("add_ground_collision")),
+    )
+
     robot_state_publisher = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
@@ -182,9 +196,11 @@ def generate_launch_description():
         use_rviz_arg,
         demo_arg,
         cartesian_tip_link_arg,
+        add_ground_collision_arg,
         static_tf_node,
         robot_state_publisher,
         move_group_node,
+        ground_plane_scene_node,
         trajectory_bridge_node,
         executor_node,
         rviz_group,

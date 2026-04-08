@@ -2,6 +2,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -69,6 +72,19 @@ def generate_launch_description():
         executable="move_group",
         output="screen",
         parameters=[move_group_params],
+    )
+
+    add_ground_collision_arg = DeclareLaunchArgument(
+        "add_ground_collision",
+        default_value="true",
+        description="Add planning-scene ground at z=0 in panda_link0.",
+    )
+    ground_plane_scene_node = Node(
+        package="moveitpy_execute_node",
+        executable="ground_plane_scene",
+        name="ground_plane_scene",
+        output="log",
+        condition=IfCondition(LaunchConfiguration("add_ground_collision")),
     )
 
     robot_state_publisher = Node(
@@ -152,9 +168,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        add_ground_collision_arg,
         static_tf_node,
         robot_state_publisher,
         move_group_node,
+        ground_plane_scene_node,
         ros2_control_node,
         joint_state_broadcaster_spawner,
         panda_arm_controller_spawner,

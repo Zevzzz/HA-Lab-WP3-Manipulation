@@ -30,6 +30,7 @@ setup(
             "demo_random_poses = moveitpy_execute_node.demo_random_poses:main",
             "demo_fixed_pose = moveitpy_execute_node.demo_fixed_pose:main",
             "grasp_with_candidates = moveitpy_execute_node.grasp_with_candidates:main",
+            "ground_plane_scene = moveitpy_execute_node.ground_plane_scene:main",
             # Backward compatibility: old names run the new demos (executor must be running)
             "grasp_sequence = moveitpy_execute_node.demo_grasp_sequence:main",
             "pose_goal = moveitpy_execute_node.demo_random_poses:main",

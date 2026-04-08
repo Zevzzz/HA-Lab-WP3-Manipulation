@@ -10,7 +10,9 @@
   <depend>rclpy</depend>
   <depend>control_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>moveit_msgs</depend>
   <depend>moveit_py</depend>
+  <depend>shape_msgs</depend>
   <depend>moveit_resources_panda_description</depend>
   <depend>moveit_resources_panda_moveit_config</depend>
   <depend>moveitpy_execute_node_msgs</depend>

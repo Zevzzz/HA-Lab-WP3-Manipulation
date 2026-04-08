@@ -34,6 +34,11 @@ def _opaque_setup(context, *_args, **_kwargs):
         "1",
         "yes",
     )
+    add_ground = context.launch_configurations.get("add_ground_collision", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     use_rviz = context.launch_configurations.get("use_rviz", "false").lower() in (
         "true",
         "1",
@@ -121,13 +126,29 @@ def _opaque_setup(context, *_args, **_kwargs):
             output="screen",
             parameters=[move_group_params, use_sim_time],
         ),
+    ]
+
+    if add_ground:
+        nodes.append(
+            Node(
+                package="moveitpy_execute_node",
+                executable="ground_plane_scene",
+                name="ground_plane_scene",
+                output="log",
+                parameters=[use_sim_time],
+            )
+        )
+
+    nodes.extend(
+        [
         Node(
             package="controller_manager",
             executable="ros2_control_node",
             parameters=[moveit_config.robot_description, ros2_controllers_path],
             output="screen",
         ),
-    ]
+        ]
+    )
 
     # Mock: joint_state_broadcaster publishes /joint_states from GenericSystem.
     # Isaac: Isaac publishes /joint_states; relay feeds /isaac_joint_states only.
@@ -246,6 +267,11 @@ def generate_launch_description():
                 "isaac_joint_commands_out",
                 default_value="/joint_command",
                 description="JointState commands to Isaac Sim (from /isaac_joint_commands).",
+            ),
+            DeclareLaunchArgument(
+                "add_ground_collision",
+                default_value="true",
+                description="Add planning-scene ground box at z=0 (panda_link0).",
             ),
             OpaqueFunction(function=_opaque_setup),
         ]

@@ -13,3 +13,6 @@ timestamp_iso,yaml_path,total_candidates,candidate_index_used,num_failed_before,
 2026-04-08T04:02:20.039712Z,Mug_9991_grasps.yaml,1000,1,0,True,Grasp sequence complete (lift).
 2026-04-08T04:03:23.651347Z,Mug_9991_grasps.yaml,1000,0,0,False,Action server not available
 2026-04-08T04:04:13.383204Z,Mug_9991_grasps.yaml,1000,1,0,True,Grasp sequence complete (lift).
+2026-04-08T04:36:11.411227Z,Mug_2011_grasps.yaml,1000,2,1,True,Grasp sequence complete (lift).
+2026-04-08T04:37:39.757237Z,Mug_2011_grasps.yaml,1000,2,1,True,Grasp sequence complete (lift).
+2026-04-08T05:18:36.251739Z,Mug_2011_grasps.yaml,1000,2,1,True,Grasp sequence complete (lift).
