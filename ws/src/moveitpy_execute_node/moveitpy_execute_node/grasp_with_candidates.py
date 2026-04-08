@@ -32,6 +32,9 @@ even when the math is otherwise correct. Fix with --pc-centroid-shift-local-xyz 
 centroid in world and pass that as --object-center).
 
 Expects executor_node (ExecutePose). Appends one row to grasp_execution_results.csv.
+
+Execution uses ``grasp_execution`` (approach, grasp, close gripper, lift +Z or home) — see
+``GraspExecutionConfig`` and CLI flags ``--no-approach``, ``--approach-offset-m``, ``--post-grasp-lift-z``, etc.
 """
 
 from __future__ import annotations
@@ -56,7 +59,13 @@ from moveitpy_execute_node_msgs.action import ExecutePose
 from .constants import FRAME_ID as WORLD_FRAME_ID
 from scipy.spatial.transform import Rotation
 
+from .grasp_execution import (
+    GraspExecutionConfig,
+    execute_grasp_sequence,
+    plan_grasp_with_optional_approach,
+)
 from .transform_utils import (
+    T_graspgen_tcp_to_moveit_panda_hand,
     franka_T_link8_to_panda_hand,
     grasp_pose_world_to_link8_goal,
     matrix4_compose,
@@ -169,8 +178,9 @@ def grasp_to_pose_stamped(
     T_gripper_offset: np.ndarray,
     world_frame_id: str,
     T_sim_from_pc: np.ndarray,
+    T_graspgen_tcp_align: np.ndarray,
 ) -> PoseStamped:
-    """T_command = T_world_object @ T_sim_from_pc @ T_pc_grasp @ T_gripper_offset (4x4 chain)."""
+    """T_command = T_world @ T_sim @ T_yaml @ T_graspgen_align @ T_gripper_offset (see transform_utils)."""
     p = grasp.get("position") or [0.0, 0.0, 0.0]
     o = grasp.get("orientation") or [0.0, 0.0, 0.0, 1.0]
     T_obj_grasp = pose_to_matrix4(
@@ -181,6 +191,7 @@ def grasp_to_pose_stamped(
         matrix4_compose(T_world_object, T_sim_from_pc),
         T_obj_grasp,
     )
+    T_world_grasp = matrix4_compose(T_world_grasp, T_graspgen_tcp_align)
     T_world_cmd = grasp_pose_world_to_link8_goal(T_world_grasp, T_gripper_offset)
     pos_world, quat_world = matrix4_to_pose(T_world_cmd)
     msg = PoseStamped()
@@ -261,6 +272,8 @@ def run(
     pc_centroid_shift_local_xyz: tuple[float, float, float],
     yaml_pose_frame: str,
     sim_from_pc_frame_rpy_deg_cli: Optional[tuple[float, float, float]],
+    exec_config: GraspExecutionConfig,
+    align_graspgen_franka_fingers: bool,
 ) -> int:
     logger = node.get_logger()
     try:
@@ -291,8 +304,12 @@ def run(
         if any(abs(x) > 1e-9 for x in align_rpy)
         else np.eye(4)
     )
+    T_graspgen_tcp_align = T_graspgen_tcp_to_moveit_panda_hand() if align_graspgen_franka_fingers else np.eye(4)
     logger.info(
         f"PC→sim object frame: rpy deg (intrinsic xyz) = {align_rpy} ({align_source})"
+    )
+    logger.info(
+        f"GraspGen→panda_hand finger align: {'on (GraspGen +X close → URDF +Y, see transform_utils)' if align_graspgen_franka_fingers else 'off'}"
     )
 
     try:
@@ -331,7 +348,12 @@ def run(
             f"large X/Y means goal is offset from centroid (rim grasp), not centered over the mug."
         )
         p0 = grasp_to_pose_stamped(
-            grasps[0], T_world_object, T_gripper_offset, WORLD_FRAME_ID, T_sim_from_pc,
+            grasps[0],
+            T_world_object,
+            T_gripper_offset,
+            WORLD_FRAME_ID,
+            T_sim_from_pc,
+            T_graspgen_tcp_align,
         )
         g = p0.pose
         logger.info(
@@ -350,31 +372,49 @@ def run(
     num_failed_before = 0
     last_message = ""
     winning_pose: Optional[PoseStamped] = None
+    winning_approach: Optional[PoseStamped] = None
 
     for i, g in enumerate(grasps):
         idx_1based = i + 1
-        pose = grasp_to_pose_stamped(g, T_world_object, T_gripper_offset, WORLD_FRAME_ID, T_sim_from_pc)
+        pose = grasp_to_pose_stamped(
+            g, T_world_object, T_gripper_offset, WORLD_FRAME_ID, T_sim_from_pc, T_graspgen_tcp_align,
+        )
         logger.info(f"Planning grasp {idx_1based}/{total}")
-        success, msg = send_pose_and_wait(node, client, pose, plan_only=True, timeout_result=15.0)
-        if success:
+        ok, msg, approach_pose = plan_grasp_with_optional_approach(
+            node,
+            client,
+            pose,
+            exec_config,
+            send_pose_and_wait,
+            plan_timeout_s=15.0,
+        )
+        if ok:
             candidate_index_used = idx_1based
             num_failed_before = i
             winning_pose = pose
+            winning_approach = approach_pose
             last_message = msg or "Plan found."
-            logger.info(f"Grasp {idx_1based} planned OK, executing.")
+            logger.info(f"Grasp {idx_1based} planned OK ({msg}). Executing sequence.")
             break
         last_message = msg
         logger.warning(f"Grasp {idx_1based} failed: {msg}")
 
     if winning_pose is not None:
-        exec_ok, msg = send_pose_and_wait(node, client, winning_pose, plan_only=False)
+        exec_ok, msg = execute_grasp_sequence(
+            node,
+            client,
+            winning_pose,
+            exec_config,
+            send_pose_and_wait,
+            approach_pose=winning_approach,
+            home_pose=None,
+            exec_timeout_s=60.0,
+            logger=logger,
+        )
+        success = exec_ok
+        last_message = msg if msg else last_message
         if not exec_ok:
-            success = False
-            last_message = msg or "Execution failed."
             logger.error(f"Execution failed: {last_message}")
-        else:
-            success = True
-            last_message = last_message or "OK"
     else:
         success = False
 
@@ -470,6 +510,63 @@ def main(args=None) -> int:
         help="Fixed rotation from GraspGen/point-cloud frame to Isaac/sim object frame (intrinsic XYZ deg). "
         "Overrides YAML pc_to_sim_frame_rpy_deg if both set. Typical Y-up mesh vs Z-up sim: try -90 0 0 or 90 0 0.",
     )
+    parser.add_argument(
+        "--no-approach",
+        action="store_true",
+        help="Skip linear approach waypoint; go directly to grasp pose (default: approach enabled).",
+    )
+    parser.add_argument(
+        "--approach-offset-m",
+        type=float,
+        default=0.05,
+        help="Retreat distance (m) along TCP axis before linear-in grasp (default: 0.05).",
+    )
+    parser.add_argument(
+        "--approach-axis-local",
+        nargs=3,
+        type=float,
+        default=[0.0, 0.0, 1.0],
+        metavar=("LX", "LY", "LZ"),
+        help="Unit direction in TCP frame from approach toward final (default: 0 0 1 = +Z).",
+    )
+    parser.add_argument(
+        "--no-open-gripper-first",
+        action="store_true",
+        help="Do not open gripper before the approach motion.",
+    )
+    parser.add_argument(
+        "--gripper-settle-s",
+        type=float,
+        default=1.5,
+        help="Sleep after close before lift or home (default: 1.5).",
+    )
+    parser.add_argument(
+        "--post-grasp-lift-z",
+        type=float,
+        default=0.3,
+        help="After close, move TCP this many meters along +panda_link0 Z (default: 0.3). Ignored with --move-home-after.",
+    )
+    parser.add_argument(
+        "--no-post-grasp-lift",
+        action="store_true",
+        help="After close, stay at grasp (no vertical lift).",
+    )
+    parser.add_argument(
+        "--move-home-after",
+        action="store_true",
+        help="After close, move to default home instead of lifting.",
+    )
+    parser.add_argument(
+        "--inter-segment-settle-s",
+        type=float,
+        default=0.4,
+        help="Sleep after approach (and after close before lift/home) so MoveIt sees updated /joint_states (default: 0.4). Set 0 to disable.",
+    )
+    parser.add_argument(
+        "--no-align-graspgen-franka-fingers",
+        action="store_true",
+        help="Disable fixed GraspGen→panda_hand rotation (GraspGen +X close vs URDF finger axis on +Y). Default: alignment ON.",
+    )
     parsed, unknown = parser.parse_known_args(args)
 
     object_center_override: Optional[tuple[float, float, float]] = None
@@ -517,6 +614,23 @@ def main(args=None) -> int:
             parsed.sim_from_pc_frame_rpy_deg[2],
         )
 
+    ax = parsed.approach_axis_local
+    lift_z = (
+        0.0
+        if parsed.move_home_after or parsed.no_post_grasp_lift
+        else float(parsed.post_grasp_lift_z)
+    )
+    exec_config = GraspExecutionConfig(
+        use_approach=not parsed.no_approach,
+        approach_offset_m=float(parsed.approach_offset_m),
+        approach_direction_local_xyz=(float(ax[0]), float(ax[1]), float(ax[2])),
+        open_gripper_before=not parsed.no_open_gripper_first,
+        gripper_settle_s=float(parsed.gripper_settle_s),
+        inter_segment_settle_s=float(parsed.inter_segment_settle_s),
+        move_home_after=parsed.move_home_after,
+        post_grasp_lift_world_z_m=lift_z,
+    )
+
     rclpy.init(args=unknown)
     node = rclpy.create_node("grasp_with_candidates")
     try:
@@ -534,6 +648,8 @@ def main(args=None) -> int:
             pc_centroid_shift_local_xyz=sl,
             yaml_pose_frame=parsed.yaml_pose_frame,
             sim_from_pc_frame_rpy_deg_cli=sim_rpy_cli,
+            exec_config=exec_config,
+            align_graspgen_franka_fingers=not parsed.no_align_graspgen_franka_fingers,
         )
     finally:
         node.destroy_node()

@@ -59,5 +59,13 @@ class PoseExecutor:
         """
         plan_result = self.plan_to_pose(pose)
         if not plan_result:
+            self._node.get_logger().warning(
+                "ExecutePose: planning failed (start state may be stale vs sim; try settle between segments)."
+            )
             return False
-        return self.execute_trajectory(plan_result.trajectory)
+        if not self.execute_trajectory(plan_result.trajectory):
+            self._node.get_logger().warning(
+                "ExecutePose: trajectory execution failed (controller / Isaac / time parameterization)."
+            )
+            return False
+        return True

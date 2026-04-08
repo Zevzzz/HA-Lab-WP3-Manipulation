@@ -90,6 +90,35 @@ def matrix4_from_rpy_xyz(
     return T
 
 
+def T_graspgen_tcp_to_moveit_panda_hand() -> np.ndarray:
+    """
+    Fixed rotation from GraspGen TCP convention to ``panda_hand`` as used by MoveIt.
+
+    GraspGen (``deps/GraspGen/docs/GRIPPER_DESCRIPTION.md``): approach = +Z, finger closing = +X.
+
+    Franka URDF ``panda.urdf``: ``panda_finger_joint*`` axis is ``(0, 1, 0)`` in ``panda_hand`` —
+    fingers translate along **+/-Y** of the hand link, not X.
+
+    This is the same kind of offset NVIDIA documents as ``transform_offset_from_asset_to_graspgen_convention``:
+    a **constant rigid alignment** between dataset/tool definition and the asset, not an ad hoc sim tweak.
+
+    Right-multiply on the grasp pose (same TCP origin): ``T_world_cmd = T_world_graspgen @ T_this`` (rotation only).
+    """
+    # R_{G<-H}: columns = panda_hand basis expressed in GraspGen TCP; R_wh = R_wg @ R_{G<-H}.
+    # Y_h (finger travel) -> -X_g (same line as GraspGen "close"); Z_h -> Z_g (approach).
+    r = np.array(
+        [
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    t = np.eye(4)
+    t[:3, :3] = r
+    return t
+
+
 def franka_T_link8_to_panda_hand() -> np.ndarray:
     """
     URDF panda_hand_joint: child panda_hand in parent panda_link8, rpy = (0, 0, -45°), xyz = 0.

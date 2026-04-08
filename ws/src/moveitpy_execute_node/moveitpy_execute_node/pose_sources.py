@@ -76,6 +76,11 @@ def _default_home_pose() -> PoseStamped:
     )
 
 
+def get_default_home_pose() -> PoseStamped:
+    """Ready/home TCP pose in ``panda_link0`` (same as demo grasp sequence)."""
+    return _default_home_pose()
+
+
 def get_default_pose_source() -> PoseSource:
     """Return the default pose source (constant pre-grasp + home). Used by demos."""
     return ConstantPoseSource()

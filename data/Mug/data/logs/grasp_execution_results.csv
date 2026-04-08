@@ -3,3 +3,13 @@ timestamp_iso,yaml_path,total_candidates,candidate_index_used,num_failed_before,
 2026-04-08T03:16:33.371659Z,Mug_493_grasps.yaml,50,1,0,True,Plan found.
 2026-04-08T03:17:36.312024Z,Mug_5009_grasps.yaml,50,1,0,True,Plan found.
 2026-04-08T03:21:47.978571Z,Mug_5009_grasps.yaml,50,1,0,True,Plan found.
+2026-04-08T03:29:11.797292Z,Mug_5009_grasps.yaml,50,1,0,True,Grasp sequence complete (home reached).
+2026-04-08T03:32:38.108080Z,Mug_9991_grasps.yaml,300,1,0,False,Final pose execution failed: Planning or execution failed.
+2026-04-08T03:35:31.325897Z,Mug_9991_grasps.yaml,300,1,0,True,Grasp sequence complete (lift).
+2026-04-08T03:35:51.248106Z,Mug_9991_grasps.yaml,300,1,0,True,Grasp sequence complete (lift).
+2026-04-08T03:38:35.372787Z,Mug_2011_grasps.yaml,50,1,0,False,Final pose execution failed: Planning or execution failed.
+2026-04-08T03:59:55.867412Z,Mug_2011_grasps.yaml,1000,1,0,True,Grasp sequence complete (lift).
+2026-04-08T04:01:03.951346Z,Mug_9991_grasps.yaml,1000,1,0,True,Grasp sequence complete (lift).
+2026-04-08T04:02:20.039712Z,Mug_9991_grasps.yaml,1000,1,0,True,Grasp sequence complete (lift).
+2026-04-08T04:03:23.651347Z,Mug_9991_grasps.yaml,1000,0,0,False,Action server not available
+2026-04-08T04:04:13.383204Z,Mug_9991_grasps.yaml,1000,1,0,True,Grasp sequence complete (lift).
