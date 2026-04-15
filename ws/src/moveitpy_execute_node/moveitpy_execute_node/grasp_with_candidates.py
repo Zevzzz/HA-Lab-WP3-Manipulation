@@ -14,13 +14,11 @@ A pure rotation offset does **not** change goal **translation**; wrong XY vs the
 position in the object frame or prim-vs-centroid frame mismatch (`--pc-centroid-shift-*`).
 
 CRITICAL — point cloud frame vs simulation object frame:
-  • GraspGen poses are in the **same orthonormal basis as the centered point cloud** (whatever axes
-    the mesh / PLY was exported in: e.g. Y-up art tool vs Z-up sim). That frame is **not** guaranteed
-    to match your Isaac prim's local X/Y/Z.
-  • Fix (non–ad hoc): one fixed rigid rotation **T_sim_from_pc** (usually rotation only), stored as
-    ``pc_to_sim_frame_rpy_deg`` in YAML (see graspgen_request --sim-frame-rpy-deg) or passed at runtime
-    as ``--sim-from-pc-frame-rpy-deg R P Y`` (intrinsic XYZ deg, same convention as transform_utils).
-    Full chain: T_world_grasp = T_world_sim_object @ T_sim_from_pc @ T_pc_grasp.
+  • GraspGen poses are in the **same orthonormal basis as the centered point cloud** (axes of the
+    PLY you exported — align that mesh to Isaac in CloudCompare or similar before sampling).
+  • If the PLY frame still does not match the sim prim at runtime, apply one fixed rotation with
+    ``--sim-from-pc-frame-rpy-deg R P Y`` (intrinsic XYZ deg). Chain:
+    T_world_grasp = T_world_sim_object @ T_sim_from_pc @ T_pc_grasp.
 
 CRITICAL — two different "object origins":
   • Grasp YAML / GraspGen use the **point cloud centroid** frame (mean-centered .ply / .npy).
@@ -83,7 +81,6 @@ DEFAULT_TABLE_Z_M = 0.05
 DEFAULT_OBJECT_X_M = 0.4
 DEFAULT_OBJECT_Y_M = 0.0
 YAML_KEY_OBJECT_HALF_HEIGHT_M = "object_half_height_m"
-YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG = "pc_to_sim_frame_rpy_deg"
 
 
 @dataclass(frozen=True)
@@ -97,7 +94,6 @@ class ObjectPoseConfig:
 class GraspsYamlData:
     grasps: list[dict]
     object_half_height_m: Optional[float]
-    pc_to_sim_frame_rpy_deg: Optional[tuple[float, float, float]]
 
 
 def load_grasps_yaml(path: Path) -> GraspsYamlData:
@@ -112,14 +108,9 @@ def load_grasps_yaml(path: Path) -> GraspsYamlData:
     half_height = doc.get(YAML_KEY_OBJECT_HALF_HEIGHT_M)
     if half_height is not None:
         half_height = float(half_height)
-    rpy_key = doc.get(YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG)
-    pc_to_sim: Optional[tuple[float, float, float]] = None
-    if rpy_key is not None and isinstance(rpy_key, (list, tuple)) and len(rpy_key) == 3:
-        pc_to_sim = (float(rpy_key[0]), float(rpy_key[1]), float(rpy_key[2]))
     return GraspsYamlData(
         grasps=grasps,
         object_half_height_m=half_height,
-        pc_to_sim_frame_rpy_deg=pc_to_sim,
     )
 
 
@@ -293,9 +284,6 @@ def run(
     if sim_from_pc_frame_rpy_deg_cli is not None:
         align_rpy = sim_from_pc_frame_rpy_deg_cli
         align_source = "CLI --sim-from-pc-frame-rpy-deg"
-    elif data.pc_to_sim_frame_rpy_deg is not None:
-        align_rpy = data.pc_to_sim_frame_rpy_deg
-        align_source = f"YAML {YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG}"
     else:
         align_rpy = (0.0, 0.0, 0.0)
         align_source = "identity (no pc→sim rotation)"
@@ -507,8 +495,9 @@ def main(args=None) -> int:
         type=float,
         default=None,
         metavar=("RX", "RY", "RZ"),
-        help="Fixed rotation from GraspGen/point-cloud frame to Isaac/sim object frame (intrinsic XYZ deg). "
-        "Overrides YAML pc_to_sim_frame_rpy_deg if both set. Typical Y-up mesh vs Z-up sim: try -90 0 0 or 90 0 0.",
+        help="Rotation from point-cloud (YAML) frame to Isaac object frame (intrinsic XYZ deg). "
+        "Prefer aligning the PLY in CloudCompare first; use this only if a fixed offset remains. "
+        "Typical Y-up vs Z-up: try -90 0 0 or 90 0 0.",
     )
     parser.add_argument(
         "--no-approach",

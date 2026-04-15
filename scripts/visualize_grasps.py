@@ -11,8 +11,7 @@ Usage: python visualize_grasps.py Mug8192_grasps.yaml [Mug8192.ply]
        python visualize_grasps.py path/to/grasps.yaml --center-pointcloud
        python visualize_grasps.py path/to/grasps.yaml --sim-from-pc-frame-rpy-deg -90 0 0
 
-Use the same ``--sim-from-pc-frame-rpy-deg`` as ``grasp_with_candidates`` (or rely on YAML
-``pc_to_sim_frame_rpy_deg``) so the mug geometry and grasp frames share the sim object axes.
+Use the same ``--sim-from-pc-frame-rpy-deg`` as ``grasp_with_candidates`` when checking alignment.
 
 Requires: open3d, pyyaml, numpy, scipy. For .ply: trimesh.
 """
@@ -67,26 +66,8 @@ def pose_to_matrix(pos, ori) -> np.ndarray:
     return T
 
 
-YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG = "pc_to_sim_frame_rpy_deg"
-
-
 def rotation_matrix_from_rpy_xyz_deg(rpy_deg: tuple[float, float, float]) -> np.ndarray:
     return Rotation.from_euler("xyz", list(rpy_deg), degrees=True).as_matrix()
-
-
-def resolve_sim_alignment_rpy(
-    yaml_doc: dict,
-    cli_rpy: Optional[tuple[float, float, float]],
-) -> tuple[Optional[tuple[float, float, float]], str]:
-    if cli_rpy is not None:
-        return cli_rpy, "CLI --sim-from-pc-frame-rpy-deg"
-    raw = yaml_doc.get(YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG)
-    if raw is not None and isinstance(raw, (list, tuple)) and len(raw) == 3:
-        return (
-            (float(raw[0]), float(raw[1]), float(raw[2])),
-            f"YAML {YAML_KEY_PC_TO_SIM_FRAME_RPY_DEG}",
-        )
-    return None, ""
 
 
 def main():
@@ -131,8 +112,7 @@ def main():
         type=float,
         default=None,
         metavar=("RX", "RY", "RZ"),
-        help="Legacy / runtime alignment: rotate centered cloud AND grasps (same as grasp_with_candidates). "
-        "Intrinsic XYZ deg. Overrides YAML pc_to_sim_frame_rpy_deg if both set.",
+        help="Rotate centered cloud AND grasps (same as grasp_with_candidates). Intrinsic XYZ deg.",
     )
     p.add_argument(
         "--rotate-pc-only-rpy-deg",
@@ -140,8 +120,7 @@ def main():
         type=float,
         default=None,
         metavar=("RX", "RY", "RZ"),
-        help="Use when YAML was built with graspgen_request --sim-frame-rpy-deg (grasps already in sim frame): "
-        "only rotate the point cloud to match; do not transform grasp frames.",
+        help="Rotate point cloud only; grasp frames unchanged (e.g. grasps in sim frame, PLY still in mesh export frame).",
     )
     args = p.parse_args()
 
@@ -156,14 +135,15 @@ def main():
         print("Use only one of --sim-from-pc-frame-rpy-deg and --rotate-pc-only-rpy-deg.", file=sys.stderr)
         return 1
 
-    cli_align = None
+    align_rpy: Optional[tuple[float, float, float]] = None
+    align_source = ""
     if args.sim_from_pc_frame_rpy_deg is not None:
-        cli_align = (
+        align_rpy = (
             float(args.sim_from_pc_frame_rpy_deg[0]),
             float(args.sim_from_pc_frame_rpy_deg[1]),
             float(args.sim_from_pc_frame_rpy_deg[2]),
         )
-    align_rpy, align_source = resolve_sim_alignment_rpy(data, cli_align)
+        align_source = "CLI --sim-from-pc-frame-rpy-deg"
     pc_only_rpy: Optional[tuple[float, float, float]] = None
     if args.rotate_pc_only_rpy_deg is not None:
         pc_only_rpy = (
@@ -210,7 +190,7 @@ def main():
         transform_grasps = False
         print(
             f"PC-only rotation rpy deg {pc_only_rpy} (--rotate-pc-only-rpy-deg): "
-            "point cloud aligned to sim; grasp frames unchanged (YAML already sim-aligned)."
+            "point cloud rotated; grasp frames unchanged."
         )
     elif align_rpy is not None and any(abs(x) > 1e-9 for x in align_rpy):
         r_mat = rotation_matrix_from_rpy_xyz_deg(align_rpy)
