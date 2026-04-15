@@ -2,89 +2,102 @@
 
 ## Overview
 
-Modular MoveItPy stack for the Panda arm: executor node exposes an **ExecutePose** action for motion planning and execution; a trajectory bridge forwards commands to Isaac Sim. Demos (grasp sequence, random poses) call the action to verify the pipeline. Planning uses OMPL. Intended for GraspGen evaluation, humanoid control, and RL policy training in Isaac Sim.
+End-to-end path from **object point clouds** → **GraspGen** (ZMQ) → **grasps YAML** → **MoveItPy** (ExecutePose) → **Isaac Sim** via a trajectory bridge. Panda planning uses OMPL; grasps are aligned to Franka `panda_hand` by default. Intended for GraspGen evaluation and later humanoid / RL hooks.
 
-- **ROS stack**
-  - **Executor node:** MoveItPy + **ExecutePose** action; any node sends a target pose and gets motion (demos, GraspGen eval, RL).
-  - **Trajectory bridge:** FollowJointTrajectory → **/joint_command**, merges **/gripper_command**; no controller_manager when using Isaac.
-  - **Demos:** Thin clients (grasp sequence, random poses); call the action + publish gripper.
-  - **Packages:** Action type in **moveitpy_execute_node_msgs**; all logic in **moveitpy_execute_node**.
-- **GraspGen**
-  - **ZMQ server:** Runs from **deps/GraspGen** (`graspgen_server.py`, Franka Panda gripper config). Use **scripts/run_graspgen_server.sh** to launch.
-  - **scripts/graspgen_request.py:** Standalone client — point cloud (.npy/.ply) → server → grasps YAML. No GraspGen package needed (pyzmq, msgpack).
-  - **grasp_with_candidates:** ROS executable in **moveitpy_execute_node** — loads a grasps YAML (e.g. from GraspGen under `data/Mug/`), tries each candidate in order via **ExecutePose** until one succeeds (or all fail), logs one row to **data/logs/grasp_execution_results.csv** (timestamp, yaml path, total candidates, index used, failures, success, message). Run with `ros2 run moveitpy_execute_node grasp_with_candidates --path <yaml>`; optional `--log-dir`.
-- **Isaac Sim**
-  - **Launch:** **scripts/run_isaac_sim.sh** (sets ROS_DOMAIN_ID and Fast DDS profile).
-  - **Panda assets:** **ws/src/moveitpy_execute_node/urdf/panda_isaac/** (USDs + URDF) for import into your scene.
-  - **Scene:** Must publish **/joint_states** and **/clock**, subscribe to **/joint_command**. Use same ROS_DOMAIN_ID (and DDS profile) as the launch terminal.
+- **ROS:** `moveitpy_execute_node` — executor (MoveItPy + ExecutePose), trajectory bridge (`/joint_command`), `grasp_with_candidates`, optional ground collision at `z=0`.
+- **GraspGen:** server in `deps/GraspGen`; client `scripts/graspgen_request.py` (no GraspGen Python package on the client).
+- **Isaac:** scene publishes `/joint_states` + `/clock`, subscribes `/joint_command`; match `ROS_DOMAIN_ID` (see `scripts/run_isaac_sim.sh`). Panda USD/URDF under `ws/src/moveitpy_execute_node/urdf/panda_isaac/`.
 
 ## Build
 
-From the workspace (e.g. `ws/`):
 ```bash
-colcon build
-source install/setup.bash
+cd ws && colcon build --symlink-install && source install/setup.bash
 ```
 
-## How to run
+## Main workflow (obj → Isaac)
 
-```bash
-# Terminal 1 - GraspGen ZMQ Server (from repo root: source venv, then run server)
-source scripts/venv/bin/activate
-cd deps/GraspGen && bash docker/run.sh . --models ./GraspGenModels
-python client-server/graspgen_server.py --gripper_config /models/checkpoints/graspgen_franka_panda.yml --port 5557
+1. **Mesh → point cloud (CloudCompare)**  
+   Sample the object surface; export **`.ply`** (vertices only is fine). Aim for **a few thousand points** on the outer surface (see *Point cloud & top-k* below).
 
-# Terminal 2 – start Isaac Sim
-./scripts/run_isaac_sim.sh
+2. **Check axes**  
+   Grasp poses are in the **cloud frame after centroid + optional rotation**. The cloud should match how the object sits in sim (e.g. Z-up vs Y-up). Fix in CloudCompare (save rotated PLY) or use `--sim-frame-rpy-deg` when generating (see *Axes & frames*).
 
-# Terminal 3 – run executor + trajectory bridge + demo
-colcon build && source install/setup.bash
-ros2 launch moveitpy_execute_node panda_pose_goal_isaac.launch.py
+3. **Put files in `data/`**  
+   Example: `data/Mug/Mug_2011.ply`. Logs go to `data/logs/` by default.
 
-# Terminal 4 – grasp from YAML (executor + Isaac must be running): tries candidates until one succeeds, logs to data/logs/grasp_execution_results.csv
-ros2 run moveitpy_execute_node grasp_with_candidates --path /path/to/grasps.yaml
-```
+4. **GraspGen ZMQ server** (separate terminal; GPU machine typical)  
+   ```bash
+   ./scripts/run_graspgen_server.sh   # enters GraspGen docker env
+   python client-server/graspgen_server.py \
+     --gripper_config /models/checkpoints/graspgen_franka_panda.yml \
+     --port 5557
+   ```  
+   (Paths may match your GraspGen layout; see *GraspGen server*.)
 
-- Use `demo:=grasp` or `demo:=random` to run a demo (for debug); default is no demo (action server only).
-- Add `use_rviz:=true` for RViz.
-- `grasp_with_candidates`: optional `--log-dir` (default `data/logs`).
+5. **Client: PLY → YAML** (repo root; use `scripts/venv` on host if not in container)  
+   ```bash
+   source scripts/venv/bin/activate
+   python scripts/graspgen_request.py data/Mug/Mug_2011.ply --host <server_host> --port 5557 --topk 50
+   ```  
+   Writes `data/Mug/Mug_2011_grasps.yaml` and appends a row to `data/logs/graspgen_generations.csv`.
 
-**Where to run**  
-The ROS stack (executor, trajectory bridge, `grasp_with_candidates`) is intended to run **inside the container** (e.g. `docker compose run --rm sim bash`, then the commands above from `~/ws`). The container already has the ROS env—no venv needed. If you run ROS on the host instead, you’d need ROS 2 Jazzy and the workspace built there; a venv is usually not used for ROS nodes.
+6. **Sanity-check grasps (optional)**  
+   ```bash
+   python scripts/visualize_grasps.py data/Mug/Mug_2011_grasps.yaml --center-pointcloud --only-index 0
+   ```  
+   RGB axes = X/Y/Z at centroid; red/green/blue = world X/Y/Z.
 
-**Data in the container**  
-Host `./data` is mounted at **`/home/ros/data`** only. From inside the container use **`/home/ros/data/Mug/...`** or **`/home/ros/data/logs/...`** (e.g. `--path /home/ros/data/Mug/Mug8192_grasps.yaml`). **Always run `docker compose` from the repo root** so `./data` is your repo’s data; running from another directory can make Docker use or create a different, empty `./data` and your files can disappear from view (or be replaced). If `data/Mug` was wiped, restore with `git restore data/Mug/`.
+7. **Isaac Sim**  
+   Play scene; joint bridge wired to ROS (see *Isaac & ROS*).
 
-**scripts/venv**  
-Use `source scripts/venv/bin/activate` when running **scripts/graspgen_request.py** or the GraspGen server on the host (pyzmq, msgpack, PyYAML, trimesh).
+8. **ROS stack (container or host with same workspace)**  
+   ```bash
+   source ws/install/setup.bash
+   ros2 launch moveitpy_execute_node panda_pose_goal_isaac.launch.py
+   ```  
+   Optional: `use_rviz:=true`, `add_ground_collision:=false` (ground on by default).
 
-### GraspGen: align, generate, visualize
+9. **Execute grasps**  
+   ```bash
+   ros2 run moveitpy_execute_node grasp_with_candidates --path /path/to/Mug_2011_grasps.yaml
+   ```  
+   Set object pose to match sim, e.g. `--object-center X Y Z`, `--object-yaw-deg …`, and frame alignment `--sim-from-pc-frame-rpy-deg …` if you did not bake rotation into the YAML (see *Axes & frames*). Logs: `data/logs/grasp_execution_results.csv`.
 
-1. **Axes:** Candidates are in the **point cloud frame**, not Isaac’s by default. Align them (rotate/save the PLY to match the prim, or use `--sim-frame-rpy-deg` in `graspgen_request.py`, or `--sim-from-pc-frame-rpy-deg` in `grasp_with_candidates`) before trusting sim execution.
+---
 
-2. **Generate YAML** (ZMQ server running, venv on):
-```bash
-python scripts/graspgen_request.py data/Mug/Mug_493.ply --host localhost --port 5557
-```
+### GraspGen server
 
-3. **Visualize cloud + grasps** (Open3D; red/green/blue = X/Y/Z). Use `--center-pointcloud` if the PLY was not mean-centered; `--only-index N` for a single candidate; `--max-grasps K` for a few.
-```bash
-python scripts/visualize_grasps.py data/Mug/Mug_493_grasps.yaml --center-pointcloud --only-index 0
-```
+- `./scripts/run_graspgen_server.sh` — `cd deps/GraspGen` and runs `docker/run.sh` with `GraspGenModels` mounted; run **`graspgen_server.py` inside that environment** so CUDA/torch and checkpoints match upstream.
+- Client and server **`--port` must match** (default **5557**).
+- Server must stay running while `graspgen_request.py` runs (REQ/REP; one inference per request).
 
-## Troubleshooting
+### Point cloud & top-k
 
-### All grasp candidates fail with "Planning failed"
+- **Count:** Prefer **≥ ~2k–8k** points on the visible shell. Very small clouds can make the server’s outlier step drop everything — the client auto-disables outlier removal when **N < 2048**; you can force **`--no-remove-outliers`**.
+- **`--topk`:** How many ranked grasps are returned (default **50**). Higher = more retries for `grasp_with_candidates`, slower generation.
 
-If **every** candidate fails in a few milliseconds with "Planning failed", the cause is usually **MoveIt’s planning workspace bounds**, not the grasps themselves.
+### Axes & frames (common pain)
 
-- **What happens:** Object center is at table height (e.g. `z = table_z + object_half_height_m` ≈ 0.11 m). Grasp goals end up at z ≈ 0.05–0.17 m. MoveIt’s **ValidateWorkspaceBounds** adapter uses a default planning volume that often has a **minimum z of 0.2 m**, so all goals are rejected as out of bounds before any path is planned.
-- **What to do:**
-  1. **Raise the table in the scene** so the object center is at least ~0.2 m: use `--table-z 0.15` (or higher) when running `grasp_with_candidates`, and match the table height in Isaac Sim. Example: `ros2 run moveitpy_execute_node grasp_with_candidates --path ~/data/Mug/Mug8192_grasps.yaml --table-z 0.15`
-  2. **Or** use a launch that sets workspace bounds to include the table (see below). The Isaac launch in this repo sets `default_workspace_bounds` so that table-height goals (z from 0.05 m up) are allowed.
-- **Check executor logs:** On the terminal where you ran `ros2 launch ... panda_pose_goal_isaac.launch.py`, look for MoveIt messages about "ValidateWorkspaceBounds", "CheckStartStateBounds", or "planning volume"; they confirm workspace or start-state rejections.
+- YAML grasps are in **object centroid frame** (after mean subtraction; optional `--sim-frame-rpy-deg` at generate time).
+- **Do not double-apply** the same rotation: if you used `--sim-frame-rpy-deg` in `graspgen_request.py`, skip `--sim-from-pc-frame-rpy-deg` on `grasp_with_candidates`.
+- **Visualize:** If the PLY is not pre-centered, use `--center-pointcloud`. If grasps were generated with `--sim-frame-rpy-deg`, when visualizing against the **raw** PLY use the matching **`--rotate-pc-only-rpy-deg`** (see script help), not `--sim-from-pc-frame-rpy-deg` (that rotates grasps too).
+- **Gripper convention:** Default applies a fixed GraspGen→Franka hand rotation; use `--no-align-graspgen-franka-fingers` only if your checkpoint already matches URDF.
+
+### Isaac & ROS
+
+- **`scripts/run_isaac_sim.sh`** — domain ID / DDS profile helper.
+- **`panda_pose_goal_isaac.launch.py`:** `move_group` + `trajectory_bridge` + `executor_node` + static `world`→`panda_link0`; **`ground_plane_scene`** adds a floor collision at **`z=0` in `panda_link0`** (disable with `add_ground_collision:=false` if it fights your scene).
+- **`panda_eval.launch.py`:** Alternative with `ros2_control` + optional Isaac relay (`use_isaac:=true`).
+- **`--table-z` / `--object-center`:** Object vertical placement must match the sim table; YAML may include `object_half_height_m` for centroid height above table.
+
+### Data paths in Docker
+
+- If the sim container mounts repo **`./data` → `/home/ros/data`**, use paths like **`--path /home/ros/data/Mug/...`**. Run **`docker compose` from repo root** so the mount is this repo’s `data/`.
+
+### Troubleshooting: “Planning failed” for every grasp
+
+- Often **workspace bounds**: goals below the default min **z** are rejected. This repo’s Isaac launch sets **`default_workspace_bounds`** for table-height goals; align **`--table-z`** with the sim table, or raise the object.
 
 ## TODO
-- Potential tech debt – custom trajectory bridge instead of stock
-- Integrate GraspGen
-- Evaluate GraspGen functionality
+
+- GraspGen / humanoid eval metrics; tighten Isaac ↔ MoveIt bring-up docs.
