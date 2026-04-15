@@ -44,7 +44,23 @@ Thumbs.db
 htmlcov/
 .tox/
 
-# GraspGen / deps (local models and run artifacts; keep deps/GraspGen repo)
-# Uncomment if you want to ignore mounted model dirs:
-# deps/GraspGenModels/
-# deps/GraspGen/.venv/
+# deps/GraspGen — source tracked in this repo; large/binary artifacts stay local
+deps/GraspGen/GraspGenModels/*
+!deps/GraspGen/GraspGenModels/README.md
+deps/GraspGen/GraspGenModels/.git/
+
+deps/GraspGen/**/__pycache__/
+deps/GraspGen/**/.pytest_cache/
+deps/GraspGen/**/*.egg-info/
+deps/GraspGen/.venv/
+deps/GraspGen/venv/
+deps/GraspGen/runs/
+
+# Weight / export files (safety net if copied outside GraspGenModels)
+deps/GraspGen/**/*.pt
+deps/GraspGen/**/*.pth
+deps/GraspGen/**/*.ckpt
+deps/GraspGen/**/*.onnx
+deps/GraspGen/**/*.safetensors
+deps/GraspGen/**/*.bin
+deps/GraspGen/**/*.h5
