@@ -4,7 +4,7 @@
 
 - **Pipeline:** object PC → GraspGen (ZMQ) → grasps YAML → MoveItPy (ExecutePose) → Isaac (`/joint_command`).
 - **ROS (container only):** `moveitpy_execute_node` — executor, trajectory bridge, `grasp_with_candidates`, optional ground at `z=0` in `panda_link0`.
-- **GraspGen:** server under `deps/GraspGen`; client `scripts/graspgen_request.py` (no GraspGen install on client).
+- **GraspGen:** **ZMQ server** in `deps/GraspGen` (docker / GPU). **Host Python client** — `graspgen_request.py`, `visualize_grasps.py` — always run from repo root after **`source scripts/venv/bin/activate`** (pyzmq, Open3D, etc.; not the ROS container).
 - **Isaac Sim (host):** Your stage needs a **ROS ↔ sim bridge**: publish **`/joint_states`** (arm + gripper) and **`/clock`**, subscribe to **`/joint_command`** so MoveIt’s trajectories drive the robot. **`./scripts/run_isaac_sim.sh`** sets **`ROS_DOMAIN_ID=0`** and the Fast DDS profile so discovery matches the dev container. Optional kit USD/URDF: `ws/src/moveitpy_execute_node/urdf/panda_isaac/`.
 
 ## Build (inside ROS container)
@@ -14,7 +14,13 @@ docker compose run --rm sim bash   # repo root
 cd ~/ws && colcon build --symlink-install && source install/setup.bash
 ```
 
-Host-only (GraspGen client / venv): no colcon needed.
+**Host — GraspGen Python (not ROS):** from repo root, activate venv before any client script:
+
+```bash
+source scripts/venv/bin/activate
+```
+
+No `colcon` for these.
 
 ## Main workflow (obj → Isaac)
 
@@ -23,7 +29,10 @@ Host-only (GraspGen client / venv): no colcon needed.
    ```bash
    ./scripts/run_isaac_sim.sh
    ```  
-   - Import mesh: `File → Import` or drag `.obj` / `.usd`; place on table. **Do this before PLY axis alignment** — sim prim orientation is the reference.
+   - Import mesh: `File → Import` or drag `.obj` / `.usd`; place on table. **Do this before PLY axis alignment** — sim prim orientation is the reference.  
+   - **Object centroid in sim:** After placement, note the **point cloud centroid** in **`panda_link0`** (meters) — e.g. Isaac prim/world readout + offset to centroid, or a small probe script. Use that for execution:  
+     - **CLI:** `grasp_with_candidates --object-center X Y Z` (step 10), and `--object-yaw-deg` / `--object-rpy-deg` if the object is rotated on the table.  
+     - **Code defaults:** `ws/src/moveitpy_execute_node/moveitpy_execute_node/grasp_with_candidates.py` — `DEFAULT_OBJECT_X_M`, `DEFAULT_OBJECT_Y_M`, `DEFAULT_TABLE_Z_M` (used with YAML `object_half_height_m` when `--object-center` is omitted).
 
 2. **CloudCompare — mesh → PLY**  
    - Surface sample → export `.ply` (vertices OK).  
@@ -40,19 +49,24 @@ Host-only (GraspGen client / venv): no colcon needed.
 
 5. **GraspGen server** (GPU machine / GraspGen docker)  
    ```bash
-   ./scripts/run_graspgen_server.sh
+   source scripts/run_graspgen_server.sh
+
    python client-server/graspgen_server.py \
      --gripper_config /models/checkpoints/graspgen_franka_panda.yml \
      --port 5557
    ```
 
-6. **PLY → YAML** (repo root; `source scripts/venv/bin/activate` on host if needed)  
+6. **PLY → YAML** (repo root, **venv on**)  
    ```bash
-   python scripts/graspgen_request.py data/Mug/Mug_2011.ply --host <server_host> --port 5557 --topk 50
+   source scripts/venv/bin/activate
+
+   python scripts/graspgen_request.py data/Mug/Mug_2011.ply --port 5557 --topk 50
    ```
 
-7. **Visualize (optional)**  
+7. **Visualize (optional)** (same venv)  
    ```bash
+   source scripts/venv/bin/activate
+
    python scripts/visualize_grasps.py data/Mug/Mug_2011_grasps.yaml --center-pointcloud --only-index 0
    ```  
    - RGB triad = grasp X/Y/Z; R/G/B = world X/Y/Z.
@@ -77,15 +91,16 @@ Host-only (GraspGen client / venv): no colcon needed.
 
 ---
 
-### GraspGen server
+### GraspGen server & client
 
-- `./scripts/run_graspgen_server.sh` → GraspGen docker + mounted `GraspGenModels`; run `graspgen_server.py` **inside** that env.
-- Client `--port` = server `--port` (default **5557**).
-- REQ/REP: one inference per client request; keep server up.
+- **Server:** `source scripts/run_graspgen_server.sh` → GraspGen docker + `GraspGenModels`; run `graspgen_server.py` **inside** that container (not `scripts/venv`).
+- **Client (`graspgen_request.py`, `visualize_grasps.py`):** on the **host**, repo root → **`source scripts/venv/bin/activate`** every time (deps: pyzmq, msgpack, Open3D, …).
+- Client **`--port`** = server **`--port`** (default **5557**). REQ/REP — keep server running while the client runs.
 
 ### Point cloud & top-k
 
 - **N:** ~2k–8k shell points; **N < 2048** → client turns off server outlier removal (or `--no-remove-outliers`).
+- **Server outlier removal** can drop **all** points on some clouds (thin / flat parts, e.g. laptops) → fast error like `reshape ... [-1, 0, 3]`. Retry with **`--no-remove-outliers`** on `graspgen_request.py`.
 - **`--topk`:** returned ranked grasps (default **50**); ↑ = more retries, slower gen.
 
 ### Axes & frames

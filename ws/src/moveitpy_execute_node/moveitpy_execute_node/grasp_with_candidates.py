@@ -426,11 +426,12 @@ def main(args=None) -> int:
     parser.add_argument("--object-y", type=float, default=DEFAULT_OBJECT_Y_M, help="Object center y (without --object-center)")
     parser.add_argument(
         "--object-center",
-        nargs=3,
+        nargs="+",
         type=float,
         default=None,
-        metavar=("X", "Y", "Z"),
-        help="Object centroid in panda_link0 (m). Preferred for eval when you read this from sim.",
+        metavar="Z | X Y Z",
+        help="Object centroid in panda_link0 (m). One float: Z only (X,Y from --object-x / --object-y, "
+        f"defaults {DEFAULT_OBJECT_X_M}, {DEFAULT_OBJECT_Y_M}). Three floats: X Y Z.",
     )
     parser.add_argument(
         "--object-yaw-deg",
@@ -560,7 +561,17 @@ def main(args=None) -> int:
 
     object_center_override: Optional[tuple[float, float, float]] = None
     if parsed.object_center is not None:
-        object_center_override = (parsed.object_center[0], parsed.object_center[1], parsed.object_center[2])
+        oc = parsed.object_center
+        if len(oc) == 1:
+            object_center_override = (
+                float(parsed.object_x),
+                float(parsed.object_y),
+                float(oc[0]),
+            )
+        elif len(oc) == 3:
+            object_center_override = (float(oc[0]), float(oc[1]), float(oc[2]))
+        else:
+            parser.error("--object-center: pass exactly 1 float (Z only) or 3 floats (X Y Z)")
 
     if parsed.object_rpy_deg is not None:
         object_rpy_deg = (parsed.object_rpy_deg[0], parsed.object_rpy_deg[1], parsed.object_rpy_deg[2])
