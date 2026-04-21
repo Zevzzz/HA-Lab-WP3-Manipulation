@@ -55,6 +55,12 @@ from rclpy.node import Node
 from moveitpy_execute_node_msgs.action import ExecutePose
 
 from .constants import FRAME_ID as WORLD_FRAME_ID
+from .planning_scene_object_box import (
+    DEFAULT_TARGET_OBJECT_COLLISION_ID,
+    ApproachObstacleScene,
+    resolve_pc_path_next_to_grasps_yaml,
+    try_build_planning_scene_target_box,
+)
 from scipy.spatial.transform import Rotation
 
 from .grasp_execution import (
@@ -265,6 +271,11 @@ def run(
     sim_from_pc_frame_rpy_deg_cli: Optional[tuple[float, float, float]],
     exec_config: GraspExecutionConfig,
     align_graspgen_franka_fingers: bool,
+    *,
+    approach_collision_pc: Optional[Path] = None,
+    approach_collision_disabled: bool = False,
+    approach_collision_padding_m: float = 0.0,
+    approach_collision_settle_s: float = 0.15,
 ) -> int:
     logger = node.get_logger()
     try:
@@ -320,6 +331,41 @@ def run(
         pc_centroid_shift_local_xyz,
     )
     T_world_object = world_object_matrix_from_position_rpy(cx, cy, cz, object_rpy_deg)
+
+    approach_obstacle_scene: ApproachObstacleScene | None = None
+    if approach_collision_disabled:
+        logger.info("Approach collision box disabled (--no-approach-collision-box).")
+    elif not exec_config.use_approach:
+        logger.info("Approach collision box skipped (approach motion disabled).")
+    else:
+        pc_resolved = resolve_pc_path_next_to_grasps_yaml(
+            yaml_path, explicit=approach_collision_pc
+        )
+        if pc_resolved is None:
+            logger.info(
+                "Approach collision box: no .ply/.npy beside YAML; "
+                "pass --approach-collision-box-pc or add a matching point cloud file."
+            )
+        else:
+            br, err = try_build_planning_scene_target_box(
+                node,
+                pc_path=pc_resolved,
+                T_world_object=T_world_object,
+                T_sim_from_pc=T_sim_from_pc,
+                padding_m=approach_collision_padding_m,
+                reference_frame=WORLD_FRAME_ID,
+                collision_object_id=DEFAULT_TARGET_OBJECT_COLLISION_ID,
+                settle_after_publish_s=approach_collision_settle_s,
+            )
+            if br is not None:
+                approach_obstacle_scene = br
+                logger.info(
+                    f"Approach collision box: ON from {pc_resolved} "
+                    f"(MoveIt id {DEFAULT_TARGET_OBJECT_COLLISION_ID!r})."
+                )
+            else:
+                logger.warning(f"Approach collision box skipped: {err}")
+
     logger.info(
         f"Eval: user reference pos (m) = ({object_pose.x}, {object_pose.y}, {object_pose.z}); "
         f"effective PC centroid (m) = ({cx:.5f}, {cy:.5f}, {cz:.5f}); "
@@ -375,6 +421,7 @@ def run(
             exec_config,
             send_pose_and_wait,
             plan_timeout_s=15.0,
+            approach_obstacle_scene=approach_obstacle_scene,
         )
         if ok:
             candidate_index_used = idx_1based
@@ -398,6 +445,7 @@ def run(
             home_pose=None,
             exec_timeout_s=60.0,
             logger=logger,
+            approach_obstacle_scene=approach_obstacle_scene,
         )
         success = exec_ok
         last_message = msg if msg else last_message
@@ -508,8 +556,8 @@ def main(args=None) -> int:
     parser.add_argument(
         "--approach-offset-m",
         type=float,
-        default=0.05,
-        help="Retreat distance (m) along TCP axis before linear-in grasp (default: 0.05).",
+        default=0.2,
+        help="Retreat distance (m) along TCP axis before linear-in grasp (default: 0.2).",
     )
     parser.add_argument(
         "--approach-axis-local",
@@ -556,6 +604,30 @@ def main(args=None) -> int:
         "--no-align-graspgen-franka-fingers",
         action="store_true",
         help="Disable fixed GraspGen→panda_hand rotation (GraspGen +X close vs URDF finger axis on +Y). Default: alignment ON.",
+    )
+    parser.add_argument(
+        "--approach-collision-box-pc",
+        type=Path,
+        default=None,
+        help="Point cloud .ply or .npy for AABB obstacle during approach only. "
+        "Default: file beside YAML with same stem as grasps (e.g. Mug_1_grasps.yaml → Mug_1.ply).",
+    )
+    parser.add_argument(
+        "--no-approach-collision-box",
+        action="store_true",
+        help="Disable planning-scene box around the object during approach.",
+    )
+    parser.add_argument(
+        "--approach-collision-box-padding-m",
+        type=float,
+        default=0.0,
+        help="Padding added to each AABB half-extent of the approach obstacle (m). Default: 0.",
+    )
+    parser.add_argument(
+        "--approach-collision-scene-settle-s",
+        type=float,
+        default=0.15,
+        help="Sleep after each collision_object ADD/REMOVE so MoveIt applies the update. Default: 0.15.",
     )
     parsed, unknown = parser.parse_known_args(args)
 
@@ -650,6 +722,10 @@ def main(args=None) -> int:
             sim_from_pc_frame_rpy_deg_cli=sim_rpy_cli,
             exec_config=exec_config,
             align_graspgen_franka_fingers=not parsed.no_align_graspgen_franka_fingers,
+            approach_collision_pc=parsed.approach_collision_box_pc,
+            approach_collision_disabled=parsed.no_approach_collision_box,
+            approach_collision_padding_m=float(parsed.approach_collision_box_padding_m),
+            approach_collision_settle_s=float(parsed.approach_collision_scene_settle_s),
         )
     finally:
         node.destroy_node()

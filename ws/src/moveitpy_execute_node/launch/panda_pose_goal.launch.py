@@ -32,7 +32,7 @@ def generate_launch_description():
         "plan_request_params": {
             "planning_pipeline": "ompl",
             "planner_id": "RRTConnect",
-            "planning_time": 5.0,
+            "planning_time": 0.5,
             "planning_attempts": 1,
             "max_velocity_scaling_factor": 0.2,
             "max_acceleration_scaling_factor": 0.2,

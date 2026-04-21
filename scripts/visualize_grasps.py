@@ -7,6 +7,7 @@ World axes at the origin use Open3D's coordinate frame: red = +X, green = +Y, bl
 
 Usage: python visualize_grasps.py Mug8192_grasps.yaml [Mug8192.ply]
        python visualize_grasps.py path/to/grasps.yaml --only-index 0
+       python visualize_grasps.py path/to/grasps.yaml --top 30
        python visualize_grasps.py path/to/grasps.yaml --pc path/to/pointcloud.ply
        python visualize_grasps.py path/to/grasps.yaml --center-pointcloud
        python visualize_grasps.py path/to/grasps.yaml --sim-from-pc-frame-rpy-deg -90 0 0
@@ -75,6 +76,13 @@ def main():
     p.add_argument("yaml_path", type=Path, help="Grasps YAML (from graspgen_request.py)")
     p.add_argument("pc_path", type=Path, nargs="?", default=None, help="Point cloud .ply or .npy (default: same stem as yaml with .ply)")
     p.add_argument("--max-grasps", type=int, default=None, metavar="N", help="Show at most N grasp frames (default: all)")
+    p.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Show first N grasps (0-based indices 0 .. N-1). E.g. --top 30 → indices 0–29.",
+    )
     p.add_argument(
         "--only-index",
         type=int,
@@ -202,8 +210,14 @@ def main():
             "applied to point cloud and grasp frames (same as grasp_with_candidates)."
         )
 
-    if args.only_index is not None and args.max_grasps is not None:
-        print("Use only one of --only-index and --max-grasps.", file=sys.stderr)
+    n_select = sum(
+        1 for x in (args.only_index, args.max_grasps, args.top) if x is not None
+    )
+    if n_select > 1:
+        print("Use only one of --only-index, --max-grasps, and --top.", file=sys.stderr)
+        return 1
+    if args.top is not None and args.top < 1:
+        print("--top N requires N >= 1.", file=sys.stderr)
         return 1
 
     frame_size = args.grasp_frame_size
@@ -222,7 +236,12 @@ def main():
             return 1
         indices = [i]
     else:
-        n = len(grasps_list) if args.max_grasps is None else min(args.max_grasps, len(grasps_list))
+        if args.top is not None:
+            n = min(args.top, len(grasps_list))
+        elif args.max_grasps is not None:
+            n = min(args.max_grasps, len(grasps_list))
+        else:
+            n = len(grasps_list)
         indices = list(range(n))
 
     for i in indices:
@@ -238,7 +257,14 @@ def main():
     if args.only_index is not None:
         print(f"Showing point cloud + grasp index {args.only_index} only (of {len(grasps_list)}). Close window to exit.")
     else:
-        print(f"Showing point cloud + {len(indices)} grasp frames (of {len(grasps_list)}). Close window to exit.")
+        if not indices:
+            print("No grasp indices to show (check --top / --max-grasps).", file=sys.stderr)
+            return 1
+        lo, hi = indices[0], indices[-1]
+        print(
+            f"Showing point cloud + {len(indices)} grasp frames "
+            f"(indices {lo}–{hi} of {len(grasps_list)}). Close window to exit."
+        )
     if not args.no_world_axes:
         print(
             "World axes at origin: red = +X, green = +Y, blue = +Z (Open3D right-handed). "

@@ -82,4 +82,17 @@ RUN echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc \
     && echo "if [ -f ${WS}/install/setup.bash ]; then source ${WS}/install/setup.bash; fi" >> ~/.bashrc \
     && echo 'export ROS_DOMAIN_ID=0' >> ~/.bashrc
 
+# Reinstall Fast-CDR + MoveIt msgs so typesupport matches libfastcdr
+# (avoids: undefined symbol ... fastcdr::Cdr::serialize... — a Jazzy/apt skew issue).
+# Trimesh for .ply loading (planning_scene_object_box); not in apt on Noble, so pip.
+USER root
+RUN apt-get update \
+    && apt-get install -y --reinstall \
+        ros-jazzy-fastcdr \
+        ros-jazzy-rmw-fastrtps-cpp \
+        ros-jazzy-moveit-msgs \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir --break-system-packages trimesh
+USER ros
+
 CMD ["bash"]

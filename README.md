@@ -87,6 +87,7 @@ No `colcon` for these.
    ros2 run moveitpy_execute_node grasp_with_candidates --path /home/ros/data/Mug/Mug_2011_grasps.yaml
    ```  
    - Match sim: `--object-center`, `--object-yaw-deg`; `--sim-from-pc-frame-rpy-deg` only if a fixed PC↔sim offset remains after CloudCompare.  
+   - **Approach obstacle (optional):** if a **`.ply` / `.npy`** sits beside the YAML (same stem), MoveIt gets an **AABB box** at the object pose **only for the approach**; **removed** before final grasp-in. **`.ply` requires `trimesh` in the same Python as `ros2 run`** — the repo **Dockerfile** installs it; otherwise `pip install trimesh` in the container, or use **`.npy`** and `--approach-collision-box-pc`. If you see `Approach collision box skipped: ... trimesh`, the box was **never** added (planning cannot avoid the mesh). Disable entirely: `--no-approach-collision-box`.  
    - Log: `data/logs/grasp_execution_results.csv`.
 
 ---

@@ -1,3 +1,7 @@
 timestamp_iso,yaml_path,total_candidates,candidate_index_used,num_failed_before,success,message
 2026-04-15T01:46:46.763442Z,Laptop/Laptop_3994_grasps.yaml,200,1,0,True,Grasp sequence complete (lift).
 2026-04-15T01:56:59.713363Z,Laptop/Laptop_3994_grasps.yaml,200,1,0,True,Grasp sequence complete (lift).
+2026-04-15T02:08:59.798023Z,Laptop/Laptop_3994_grasps.yaml,200,0,0,False,Approach plan failed: Planning failed.
+2026-04-15T02:15:42.203976Z,Laptop/Laptop_3994_grasps.yaml,200,1,0,True,Grasp sequence complete (lift).
+2026-04-15T02:22:15.426259Z,Laptop/Laptop_3994_grasps.yaml,200,0,0,False,Action server not available
+2026-04-15T02:31:20.961078Z,Laptop/Laptop_3994_grasps.yaml,200,0,0,False,Action server not available

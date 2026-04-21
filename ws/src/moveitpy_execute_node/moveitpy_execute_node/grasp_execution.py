@@ -19,6 +19,7 @@ from scipy.spatial.transform import Rotation
 from .constants import GRIPPER_CLOSE, GRIPPER_OPEN
 from .gripper import send_gripper_command
 from .pose_sources import get_default_home_pose
+from .planning_scene_object_box import ApproachObstacleScene
 from .utils import sleep_until_ok
 
 
@@ -43,7 +44,7 @@ class GraspExecutionConfig:
     """Tunable grasp pipeline; pass through from CLI or construct in higher-level eval code."""
 
     use_approach: bool = True
-    approach_offset_m: float = 0.05
+    approach_offset_m: float = 0.2
     # Unit vector in TCP frame: motion from approach waypoint toward final is along this axis in world.
     approach_direction_local_xyz: tuple[float, float, float] = (0.0, 0.0, 1.0)
     open_gripper_before: bool = True
@@ -117,6 +118,7 @@ def plan_grasp_with_optional_approach(
     send_pose: ExecutePoseClientFn,
     *,
     plan_timeout_s: float = 15.0,
+    approach_obstacle_scene: Optional[ApproachObstacleScene] = None,
 ) -> tuple[bool, str, Optional[PoseStamped]]:
     """
     Plan-only check for the selected candidate. Returns (ok, message, approach_pose or None).
@@ -130,13 +132,19 @@ def plan_grasp_with_optional_approach(
             config.approach_offset_m,
             config.approach_direction_local_xyz,
         )
-        ok_a, msg_a = send_pose(
-            node,
-            client,
-            approach,
-            plan_only=True,
-            timeout_result=plan_timeout_s,
-        )
+        if approach_obstacle_scene is not None:
+            approach_obstacle_scene.enable_for_approach()
+        try:
+            ok_a, msg_a = send_pose(
+                node,
+                client,
+                approach,
+                plan_only=True,
+                timeout_result=plan_timeout_s,
+            )
+        finally:
+            if approach_obstacle_scene is not None:
+                approach_obstacle_scene.disable_after_approach()
         if not ok_a:
             return False, f"Approach plan failed: {msg_a}", approach
         parts.append(msg_a)
@@ -184,10 +192,14 @@ def execute_grasp_sequence(
     home_pose: Optional[PoseStamped] = None,
     exec_timeout_s: float = 60.0,
     logger=None,
+    approach_obstacle_scene: Optional[ApproachObstacleScene] = None,
 ) -> tuple[bool, str]:
     """
     Run motion + gripper + post-grasp lift or home after plans succeeded.
     ``approach_pose`` must be provided when ``config.use_approach`` (from planning step).
+
+    If ``approach_obstacle_scene`` is set, a planning-scene obstacle is enabled for the approach
+    motion only, then removed before the final grasp-in (mirrors ``plan_grasp_with_optional_approach``).
     """
     log = logger.info if logger is not None else (lambda *_a, **_k: None)
 
@@ -200,13 +212,19 @@ def execute_grasp_sequence(
         if approach_pose is None:
             return False, "Internal error: use_approach but approach_pose is None"
         log("Executing approach waypoint.")
-        ok, msg = send_pose(
-            node,
-            client,
-            approach_pose,
-            plan_only=False,
-            timeout_result=exec_timeout_s,
-        )
+        if approach_obstacle_scene is not None:
+            approach_obstacle_scene.enable_for_approach()
+        try:
+            ok, msg = send_pose(
+                node,
+                client,
+                approach_pose,
+                plan_only=False,
+                timeout_result=exec_timeout_s,
+            )
+        finally:
+            if approach_obstacle_scene is not None:
+                approach_obstacle_scene.disable_after_approach()
         if not ok:
             return False, f"Approach execution failed: {msg}"
         if config.inter_segment_settle_s > 0.0:
