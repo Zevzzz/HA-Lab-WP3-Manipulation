@@ -7,6 +7,7 @@ Used by the executor node (action server) and can be used in-process by other co
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Optional
 
 from geometry_msgs.msg import PoseStamped
@@ -41,7 +42,13 @@ class PoseExecutor:
         """
         self._arm.set_start_state_to_current_state()
         self._arm.set_goal_state(pose_stamped_msg=pose, pose_link=self._tip_link)
+        t0 = time.perf_counter()
         plan_result = self._arm.plan()
+        elapsed = time.perf_counter() - t0
+        ok = bool(plan_result)
+        self._node.get_logger().info(
+            f"plan_to_pose: planning took {elapsed:.3f}s ({'success' if ok else 'failed'})"
+        )
         return plan_result if plan_result else None
 
     def execute_trajectory(self, trajectory: object) -> bool:

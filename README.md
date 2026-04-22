@@ -90,6 +90,20 @@ No `colcon` for these.
    - **Approach obstacle (optional):** if a **`.ply` / `.npy`** sits beside the YAML (same stem), MoveIt gets an **AABB box** at the object pose **only for the approach**; **removed** before final grasp-in. **`.ply` requires `trimesh` in the same Python as `ros2 run`** — the repo **Dockerfile** installs it; otherwise `pip install trimesh` in the container, or use **`.npy`** and `--approach-collision-box-pc`. If you see `Approach collision box skipped: ... trimesh`, the box was **never** added (planning cannot avoid the mesh). Disable entirely: `--no-approach-collision-box`.  
    - Log: `data/logs/grasp_execution_results.csv`.
 
+### Object centroid in sim (Xform wrapping)
+
+GraspGen poses are defined around the **PLY centroid**. The prim’s own origin in Isaac rarely sits there, so wrap the mesh to expose a clean handle:
+
+1. In Isaac Stage, create an empty **Xform** next to the object (e.g. `/World/Targets/<Obj>_Pivot`) and **reparent the mesh prim under it**.
+2. Move the **child mesh** (not the Xform) until the Xform’s gizmo is **visually at the PLY centroid** — cross-check against the triad in `visualize_grasps.py --center-pointcloud`. Eyeballing is fine.
+3. Use the **Xform’s world translate** as `--object-center X Y Z` for `grasp_with_candidates` (and `--object-yaw-deg` / `--object-rpy-deg` if the Xform is rotated). No USD mesh or physics edits required.
+
+### Helper scripts (host, `source scripts/venv/bin/activate`)
+
+- **`scripts/graspgen_request.py <.ply>`** — sends PLY to GraspGen server, writes `<stem>_grasps.yaml`. Key flags: `--topk N`, `--port 5557`, `--no-remove-outliers` (thin/flat clouds).
+- **`scripts/visualize_grasps.py <grasps.yaml> [pc]`** — Open3D view of grasps + cloud. `--only-index I`, `--top N`, `--center-pointcloud`, `--sim-from-pc-frame-rpy-deg RX RY RZ`, `--rotate-pc-only-rpy-deg`, `--grasp-frame-size`, `--no-world-axes`. Triad: R=+X, G=+Y, B=+Z.
+- **`scripts/rotate_ply_gui.py <.ply>`** — GUI to apply 90° world X/Y/Z rotations and **overwrite** the PLY. Use before GraspGen to align the cloud with the sim prim.
+
 ---
 
 ### GraspGen server & client
