@@ -7,6 +7,7 @@ home instead. Swap ``send_pose``, ``home_pose``, or extend ``GraspExecutionConfi
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional, Protocol, Tuple
 
@@ -48,11 +49,11 @@ class GraspExecutionConfig:
     # Unit vector in TCP frame: motion from approach waypoint toward final is along this axis in world.
     approach_direction_local_xyz: tuple[float, float, float] = (0.0, 0.0, 1.0)
     open_gripper_before: bool = True
-    gripper_open_wait_s: float = 0.5
+    gripper_open_wait_s: float = 0.3
     gripper_close_value: float = GRIPPER_CLOSE
-    gripper_settle_s: float = 1.5
+    gripper_settle_s: float = 0.2
     # Pause after each motion segment so sim + MoveIt ``current_state`` match (avoids immediate replan fail).
-    inter_segment_settle_s: float = 0.4
+    inter_segment_settle_s: float = 0.25
     # After close: either home (if True) or lift along +Z of pose frame (typically panda_link0).
     move_home_after: bool = False
     post_grasp_lift_world_z_m: float = 0.3
@@ -125,6 +126,7 @@ def plan_grasp_with_optional_approach(
     """
     approach: Optional[PoseStamped] = None
     parts: list[str] = []
+    timings: list[str] = []
 
     if config.use_approach:
         approach = compute_approach_pose(
@@ -134,6 +136,7 @@ def plan_grasp_with_optional_approach(
         )
         if approach_obstacle_scene is not None:
             approach_obstacle_scene.enable_for_approach()
+        t0 = time.perf_counter()
         try:
             ok_a, msg_a = send_pose(
                 node,
@@ -145,10 +148,13 @@ def plan_grasp_with_optional_approach(
         finally:
             if approach_obstacle_scene is not None:
                 approach_obstacle_scene.disable_after_approach()
+        dt_a = time.perf_counter() - t0
+        timings.append(f"approach={dt_a:.3f}s")
         if not ok_a:
-            return False, f"Approach plan failed: {msg_a}", approach
+            return False, f"Approach plan failed ({dt_a:.3f}s): {msg_a}", approach
         parts.append(msg_a)
 
+    t0 = time.perf_counter()
     ok_f, msg_f = send_pose(
         node,
         client,
@@ -156,17 +162,20 @@ def plan_grasp_with_optional_approach(
         plan_only=True,
         timeout_result=plan_timeout_s,
     )
+    dt_f = time.perf_counter() - t0
+    timings.append(f"final={dt_f:.3f}s")
     if not ok_f:
         prefix = "Final plan failed" if not parts else "Final plan failed (after approach ok)"
-        return False, f"{prefix}: {msg_f}", approach
+        return False, f"{prefix} ({dt_f:.3f}s): {msg_f}", approach
     parts.append(msg_f)
 
     if config.move_home_after:
         tag = "approach + final + home (home not pre-planned)" if config.use_approach else "final + home (home not pre-planned)"
-        return True, f"Planned {tag}. " + " | ".join(parts), approach
+        return True, f"Planned {tag}. [plan times: {' | '.join(timings)}] " + " | ".join(parts), approach
 
     if config.post_grasp_lift_world_z_m > 1e-9:
         lift_pose = compute_post_grasp_lift_pose(final_pose, config.post_grasp_lift_world_z_m)
+        t0 = time.perf_counter()
         ok_l, msg_l = send_pose(
             node,
             client,
@@ -174,11 +183,13 @@ def plan_grasp_with_optional_approach(
             plan_only=True,
             timeout_result=plan_timeout_s,
         )
+        dt_l = time.perf_counter() - t0
+        timings.append(f"lift={dt_l:.3f}s")
         if not ok_l:
-            return False, f"Post-grasp lift plan failed: {msg_l}", approach
+            return False, f"Post-grasp lift plan failed ({dt_l:.3f}s): {msg_l}", approach
         parts.append(msg_l)
 
-    return True, "Planned " + "; ".join(parts), approach
+    return True, f"Planned [plan times: {' | '.join(timings)}] " + "; ".join(parts), approach
 
 
 def execute_grasp_sequence(

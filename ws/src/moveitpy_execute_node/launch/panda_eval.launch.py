@@ -65,7 +65,7 @@ def _opaque_setup(context, *_args, **_kwargs):
         "plan_request_params": {
             "planning_pipeline": "ompl",
             "planner_id": "RRTConnect",
-            "planning_time": 0.5,
+            "planning_time": 0.3,
             "planning_attempts": 1,
             "max_velocity_scaling_factor": 0.2,
             "max_acceleration_scaling_factor": 0.2,

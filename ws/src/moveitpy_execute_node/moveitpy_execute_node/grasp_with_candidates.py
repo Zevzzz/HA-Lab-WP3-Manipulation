@@ -334,7 +334,10 @@ def run(
 
     approach_obstacle_scene: ApproachObstacleScene | None = None
     if approach_collision_disabled:
-        logger.info("Approach collision box disabled (--no-approach-collision-box).")
+        logger.info(
+            "Approach collision box disabled (no MoveIt object AABB; use --no-approach-collision-box "
+            "or --no-object-collision-box)."
+        )
     elif not exec_config.use_approach:
         logger.info("Approach collision box skipped (approach motion disabled).")
     else:
@@ -575,8 +578,8 @@ def main(args=None) -> int:
     parser.add_argument(
         "--gripper-settle-s",
         type=float,
-        default=1.5,
-        help="Sleep after close before lift or home (default: 1.5).",
+        default=0.2,
+        help="Sleep after close before lift or home (default: 0.2).",
     )
     parser.add_argument(
         "--post-grasp-lift-z",
@@ -615,7 +618,13 @@ def main(args=None) -> int:
     parser.add_argument(
         "--no-approach-collision-box",
         action="store_true",
-        help="Disable planning-scene box around the object during approach.",
+        help="Do not publish MoveIt's AABB obstacle from the point cloud (no object-shaped planning-scene box). "
+        "Floor collision from launch (add_ground_collision) is unchanged. Does not disable Isaac PhysX colliders.",
+    )
+    parser.add_argument(
+        "--no-object-collision-box",
+        action="store_true",
+        help="Alias for --no-approach-collision-box (same effect).",
     )
     parser.add_argument(
         "--approach-collision-box-padding-m",
@@ -723,7 +732,9 @@ def main(args=None) -> int:
             exec_config=exec_config,
             align_graspgen_franka_fingers=not parsed.no_align_graspgen_franka_fingers,
             approach_collision_pc=parsed.approach_collision_box_pc,
-            approach_collision_disabled=parsed.no_approach_collision_box,
+            approach_collision_disabled=bool(
+                parsed.no_approach_collision_box or parsed.no_object_collision_box
+            ),
             approach_collision_padding_m=float(parsed.approach_collision_box_padding_m),
             approach_collision_settle_s=float(parsed.approach_collision_scene_settle_s),
         )

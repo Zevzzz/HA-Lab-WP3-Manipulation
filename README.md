@@ -87,7 +87,7 @@ No `colcon` for these.
    ros2 run moveitpy_execute_node grasp_with_candidates --path /home/ros/data/Mug/Mug_2011_grasps.yaml
    ```  
    - Match sim: `--object-center`, `--object-yaw-deg`; `--sim-from-pc-frame-rpy-deg` only if a fixed PC↔sim offset remains after CloudCompare.  
-   - **Approach obstacle (optional):** if a **`.ply` / `.npy`** sits beside the YAML (same stem), MoveIt gets an **AABB box** at the object pose **only for the approach**; **removed** before final grasp-in. **`.ply` requires `trimesh` in the same Python as `ros2 run`** — the repo **Dockerfile** installs it; otherwise `pip install trimesh` in the container, or use **`.npy`** and `--approach-collision-box-pc`. If you see `Approach collision box skipped: ... trimesh`, the box was **never** added (planning cannot avoid the mesh). Disable entirely: `--no-approach-collision-box`.  
+   - **Approach obstacle (optional):** if a **`.ply` / `.npy`** sits beside the YAML (same stem), MoveIt gets an **AABB box** at the object pose **only for the approach**; **removed** before final grasp-in. **`.ply` requires `trimesh` in the same Python as `ros2 run`** — the repo **Dockerfile** installs it; otherwise `pip install trimesh` in the container, or use **`.npy`** and `--approach-collision-box-pc`. If you see `Approach collision box skipped: ... trimesh`, the box was **never** added (planning cannot avoid the mesh). Disable this MoveIt object box entirely: **`--no-approach-collision-box`** or alias **`--no-object-collision-box`** (floor from `add_ground_collision` in launch is unchanged; Isaac PhysX is separate).  
    - Log: `data/logs/grasp_execution_results.csv`.
 
 ### Object centroid in sim (Xform wrapping)
@@ -102,7 +102,13 @@ GraspGen poses are defined around the **PLY centroid**. The prim’s own origin 
 
 - **`scripts/graspgen_request.py <.ply>`** — sends PLY to GraspGen server, writes `<stem>_grasps.yaml`. Key flags: `--topk N`, `--port 5557`, `--no-remove-outliers` (thin/flat clouds).
 - **`scripts/visualize_grasps.py <grasps.yaml> [pc]`** — Open3D view of grasps + cloud. `--only-index I`, `--top N`, `--center-pointcloud`, `--sim-from-pc-frame-rpy-deg RX RY RZ`, `--rotate-pc-only-rpy-deg`, `--grasp-frame-size`, `--no-world-axes`. Triad: R=+X, G=+Y, B=+Z.
-- **`scripts/rotate_ply_gui.py <.ply>`** — GUI to apply 90° world X/Y/Z rotations and **overwrite** the PLY. Use before GraspGen to align the cloud with the sim prim.
+- **`scripts/rotate_ply_gui.py <.ply> …`** — 90° world X/Y/Z GUI; **Save** overwrites. Pass **one or more** PLYs (same rotation to all; batch shows clouds spread, saved files get only the rotation, no display offset). Example (Mug, repo root, venv on):  
+  ```bash
+  source scripts/venv/bin/activate
+  python scripts/rotate_ply_gui.py data/Mug/Mug_2011.ply
+  python scripts/rotate_ply_gui.py data/Mug/Mug_*.ply
+  ```
+- **`scripts/ideal_settings_online_gui.py <scan_dirs…>`** — Open3D panel: pick **object** subfolder (e.g. Mug, RectPrism, Sphere, Laptop), then **slot / topK** from scanned eval `*_grasps.yaml`, press **Run grasp** to launch `grasp_with_candidates` (local `ws/install` or `--docker-exec <container>`), press as many times as you want, then **Log block → CSV**: Tk dialog asks for total trials + successes and appends one row to **`data/logs/ideal_settings_online.csv`** (includes `object_folder`, `slot_nominal`, `topk`, `successes_reported`, `trials_in_block`, `trial_exit_codes`). Suited to deterministic pass/fail sweeps (1/1 or 0/1 per cell) while sampling/jitter support is added. Optional extra args (e.g. `--object-center …`). Example: `python scripts/ideal_settings_online_gui.py data/Mug data/RectPrism data/Sphere data/Laptop` or add `--docker-exec --container-name <docker ps name>`.
 
 ---
 
